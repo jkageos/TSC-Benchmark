@@ -1,0 +1,46 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Experiment results and logs
+results/
+logs/
+*.csv
+*.json
+*.pkl
+
+# Data preprocessing cache
+data/processed/
+data/cache/
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Environment
+.env
+.env.local
