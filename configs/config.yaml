@@ -1,0 +1,63 @@
+# TSC-Benchmark Configuration
+
+# Target datasets for benchmarking
+datasets:
+  - Adiac
+  - ArrowHead
+  - Beef
+  - Car
+  - ChlorineConcentration
+  - CinCECGTorso
+  - FiftyWords
+  - HouseTwenty
+  - KeplerLightCurves
+
+# Model configurations
+models:
+  fcn:
+    hidden_dims: [512, 256, 128]
+    dropout_rate: 0.5
+    use_batch_norm: true
+  
+  cnn:
+    num_filters: [64, 128, 256]
+    kernel_size: 3
+    dropout_rate: 0.5
+  
+  transformer:
+    d_model: 256
+    num_heads: 8
+    num_layers: 4
+    d_ff: 1024
+    dropout: 0.1
+    max_seq_len: 5000
+
+# Training configuration
+training:
+  epochs: 100
+  batch_size: 64
+  learning_rate: 0.001
+  patience: 15
+  optimizer: adam
+  optimizer_params:
+    weight_decay: 0.0001
+  
+  # Learning rate scheduler
+  use_scheduler: true
+  
+  # Device
+  device: null  # null for auto-detect (cuda if available, else cpu)
+  
+  # Data preprocessing
+  normalize: true
+  padding: none  # options: none, zero, repeat
+  max_length: null  # null for no padding/truncation
+
+# Results tracking
+results:
+  output_dir: results
+  save_checkpoints: true
+  save_history: true
+  
+# Reproducibility
+seed: 42
