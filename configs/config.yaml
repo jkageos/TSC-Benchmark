@@ -45,8 +45,8 @@ training:
   # Learning rate scheduler
   use_scheduler: true
   
-  # Device
-  device: null  # null for auto-detect (cuda if available, else cpu)
+  # Device - set to cuda for GPU, auto-detects if null
+  device: cuda
   
   # Data preprocessing
   normalize: true
