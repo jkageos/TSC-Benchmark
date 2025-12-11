@@ -77,7 +77,7 @@ def create_model(
     Factory function to create models from config.
 
     Args:
-        model_name: Name of the model ('fcn', 'cnn', 'transformer')
+        model_name: Name of the model ('fcn', 'cnn', 'transformer', 'cats', 'autoformer', 'patchtst')
         model_config: Model-specific configuration
         num_classes: Number of classification classes
         input_length: Input sequence length
@@ -86,20 +86,25 @@ def create_model(
     Returns:
         Instantiated model
     """
+    from src.models.autoformer import Autoformer
+    from src.models.cats import CATS
     from src.models.cnn import CNN
     from src.models.fcn import FCN
+    from src.models.patchtst import PatchTST
     from src.models.transformer import Transformer
 
     model_registry = {
         "fcn": FCN,
         "cnn": CNN,
         "transformer": Transformer,
+        "cats": CATS,
+        "autoformer": Autoformer,
+        "patchtst": PatchTST,
     }
 
     if model_name.lower() not in model_registry:
         raise ValueError(
-            f"Unknown model: {model_name}. "
-            f"Available models: {list(model_registry.keys())}"
+            f"Unknown model: {model_name}. Available models: {list(model_registry.keys())}"
         )
 
     model_class = model_registry[model_name.lower()]

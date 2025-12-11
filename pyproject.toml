@@ -32,11 +32,10 @@ build-backend = "hatchling.build"
 packages = ["src"]
 
 [tool.black]
-line-length = 80
 target-version = ["py313"]
 
 [tool.ruff]
-line-length = 80
+line-length = "120"
 target-version = "py313"
 select = ["E", "F", "W", "I"]
 
