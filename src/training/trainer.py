@@ -11,30 +11,54 @@ Handles:
 """
 
 import json
+import sys
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.swa_utils import SWALR, AveragedModel
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from src.data.augmentation import TimeSeriesAugmentation
 from src.training.metrics import EpochMetrics, MetricsTracker
+from src.training.tta import TestTimeAugmentation
+
+
+def get_gpu_info() -> dict[str, Any]:
+    """
+    Detect GPU type and capabilities for torch.compile support.
+
+    Returns:
+        Dict with gpu_name, supports_compile, vram_gb
+    """
+    if not torch.cuda.is_available():
+        return {"gpu_name": "CPU", "supports_compile": False, "vram_gb": 0}
+
+    gpu_name = torch.cuda.get_device_name(0)
+    vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+
+    # torch.compile is supported on Linux only
+    is_linux = sys.platform != "win32"
+    supports_compile = is_linux
+
+    return {
+        "gpu_name": gpu_name,
+        "supports_compile": supports_compile,
+        "vram_gb": vram_gb,
+        "is_linux": is_linux,
+    }
 
 
 class Trainer:
     """
     Main training orchestrator for time series classification.
-
-    Features:
-    - Automatic device detection (CUDA/CPU)
-    - Early stopping with patience
-    - Learning rate scheduling
-    - Model checkpointing (best and latest)
-    - Progress bars via tqdm
-    - Comprehensive metrics tracking
     """
 
     def __init__(
@@ -50,6 +74,17 @@ class Trainer:
         device: str | None = None,
         checkpoint_dir: str = "checkpoints",
         use_scheduler: bool = True,
+        warmup_epochs: int = 5,
+        use_amp: bool = True,
+        use_compile: bool = True,
+        compile_mode: str = "default",
+        use_augmentation: bool = True,
+        augmentation_params: dict[str, Any] | None = None,
+        use_tta: bool = False,
+        tta_augmentations: int = 5,
+        use_swa: bool = False,
+        swa_start: int = 60,
+        save_checkpoints: bool = True,
     ):
         """
         Args:
@@ -64,6 +99,7 @@ class Trainer:
             device: Device to use ('cuda', 'cpu', or None for auto-detect)
             checkpoint_dir: Directory to save model checkpoints
             use_scheduler: Whether to use learning rate scheduler
+            use_amp: Whether to use automatic mixed precision
         """
         self.model = model
         self.train_loader = train_loader
@@ -77,18 +113,54 @@ class Trainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Device setup
+        # Always use CUDA (enforce requirement)
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is required but not available. "
+                "Please ensure PyTorch with CUDA is installed: "
+                "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118"
+            )
         if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = torch.device("cuda")
         else:
             self.device = torch.device(device)
+            if "cpu" in str(self.device):
+                raise RuntimeError("CPU device specified, but CUDA is required")
 
         self.model.to(self.device)
 
-        # Learning rate scheduler
+        # Compile model for faster execution (PyTorch 2.0+)
+        gpu_info = get_gpu_info()
+        if use_compile and hasattr(torch, "compile"):
+            if gpu_info["supports_compile"]:
+                print(f"📦 GPU detected: {gpu_info['gpu_name']} ({gpu_info['vram_gb']:.1f}GB VRAM)")
+                print("✅ torch.compile supported on Linux")
+                print(f"   Compiling with mode='{compile_mode}'...")
+                try:
+                    self.model = cast(nn.Module, torch.compile(self.model, mode=compile_mode))
+                    print("✓ Model compiled successfully\n")
+                except RuntimeError as e:
+                    print(f"⚠️  torch.compile failed, falling back to eager mode: {e}\n")
+            else:
+                print(f"📦 GPU detected: {gpu_info['gpu_name']} ({gpu_info['vram_gb']:.1f}GB VRAM)")
+                print(f"⚠️  torch.compile not supported on {sys.platform}. Using eager mode.\n")
+        else:
+            if gpu_info["vram_gb"] < 2:
+                print(f"📦 GPU detected: {gpu_info['gpu_name']} ({gpu_info['vram_gb']:.1f}GB VRAM)")
+                print(f"⚠️  Skipping torch.compile due to very limited VRAM\n")
+
+        # Improved learning rate scheduler with warmup
         self.scheduler = None
         if use_scheduler:
-            self.scheduler = ReduceLROnPlateau(
-                self.optimizer, mode="max", factor=0.5, patience=5
+            # Warmup scheduler
+            warmup_scheduler = LinearLR(self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+
+            # Cosine annealing after warmup
+            cosine_scheduler = CosineAnnealingLR(self.optimizer, T_max=epochs - warmup_epochs, eta_min=1e-7)
+
+            # Combine warmup + cosine annealing
+            self.scheduler = SequentialLR(
+                self.optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_epochs]
             )
 
         # Training state
@@ -97,13 +169,38 @@ class Trainer:
         self.epochs_without_improvement = 0
         self.history: list[EpochMetrics] = []
 
-    def train_epoch(self) -> tuple[float, float]:
-        """
-        Train for one epoch.
+        self.use_amp = use_amp and torch.cuda.is_available()
 
-        Returns:
-            Tuple of (average_loss, accuracy)
-        """
+        # Initialize gradient scaler for mixed precision
+        # Always use CUDA device for scaler (since CUDA is required)
+        self.scaler: GradScaler | None = GradScaler(device=str(self.device)) if self.use_amp else None
+
+        # Time series augmentation
+        self.augment: TimeSeriesAugmentation | None = None
+        if use_augmentation:
+            params = augmentation_params or {}
+            self.augment = TimeSeriesAugmentation(**params)
+
+        # Test Time Augmentation settings
+        self.use_tta = use_tta
+        self.tta_augmentations = tta_augmentations
+
+        # Stochastic Weight Averaging
+        self.use_swa = use_swa
+        self.swa_start = swa_start
+        self.swa_model: AveragedModel | None = None
+        self.swa_scheduler: SWALR | None = None
+
+        if self.use_swa:
+            self.swa_model = AveragedModel(self.model)
+            self.swa_scheduler = SWALR(self.optimizer, swa_lr=0.0001)
+
+        # Checkpointing settings
+        self.save_checkpoints = save_checkpoints
+        self.best_state: dict[str, Any] | None = None
+
+    def train_epoch(self) -> tuple[float, float]:
+        """Train for one epoch with optional mixed precision."""
         self.model.train()
         total_loss = 0.0
         metrics_tracker = MetricsTracker(self.num_classes)
@@ -115,24 +212,46 @@ class Trainer:
         )
 
         for batch_X, batch_y in progress_bar:
-            # Move data to device
             batch_X = batch_X.to(self.device)
             batch_y = batch_y.to(self.device)
+            # Apply augmentation on training batches (expects [B,C,L])
+            augment = self.augment
+            if augment is not None:
+                if batch_X.dim() == 2:
+                    batch_X = batch_X.unsqueeze(1)
+                # Ensure shape (B,C,L)
+                if batch_X.dim() == 3 and batch_X.shape[1] != 1 and batch_X.shape[1] != batch_X.shape[-1]:
+                    pass
+                batch_X = augment(batch_X)
 
-            # Forward pass
             self.optimizer.zero_grad()
-            outputs = self.model(batch_X)
-            loss = self.criterion(outputs, batch_y)
 
-            # Backward pass
-            loss.backward()
-            self.optimizer.step()
+            # Mixed precision training
+            if self.use_amp and self.scaler is not None:
+                with autocast("cuda"):
+                    outputs = self.model(batch_X)
+                    loss = self.criterion(outputs, batch_y)
 
-            # Track metrics
+                self.scaler.scale(loss).backward()
+
+                # Gradient clipping for stability
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                outputs = self.model(batch_X)
+                loss = self.criterion(outputs, batch_y)
+                loss.backward()
+
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+                self.optimizer.step()
+
             total_loss += loss.item()
             metrics_tracker.update(outputs.detach(), batch_y)
-
-            # Update progress bar
             progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
         avg_loss = total_loss / len(self.train_loader)
@@ -142,36 +261,40 @@ class Trainer:
 
     @torch.no_grad()
     def validate(self) -> dict[str, Any]:
-        """
-        Validate on test set.
-
-        Returns:
-            Dictionary with validation metrics
-        """
+        """Validate on test set with optional TTA."""
         self.model.eval()
         total_loss = 0.0
         metrics_tracker = MetricsTracker(self.num_classes)
 
+        # Create TTA wrapper if enabled
+        tta_model = TestTimeAugmentation(self.model, self.tta_augmentations) if self.use_tta else None
+        if tta_model is not None:
+            print(f"🔄 Using TTA with {self.tta_augmentations} augmentations")
+
         progress_bar = tqdm(
             self.test_loader,
-            desc=f"Epoch {self.current_epoch + 1}/{self.epochs} [Val]",
+            desc=f"Epoch {self.current_epoch + 1}/{self.epochs} [Val{'+ TTA' if self.use_tta else ''}]",
             leave=False,
         )
 
         for batch_X, batch_y in progress_bar:
-            # Move data to device
             batch_X = batch_X.to(self.device)
             batch_y = batch_y.to(self.device)
 
-            # Forward pass
-            outputs = self.model(batch_X)
-            loss = self.criterion(outputs, batch_y)
+            # Use TTA or standard inference
+            if tta_model is not None:
+                outputs = tta_model.predict(batch_X)
+                loss = self.criterion(outputs, batch_y)
+            elif self.use_amp and self.scaler is not None:
+                with autocast("cuda"):
+                    outputs = self.model(batch_X)
+                    loss = self.criterion(outputs, batch_y)
+            else:
+                outputs = self.model(batch_X)
+                loss = self.criterion(outputs, batch_y)
 
-            # Track metrics
             total_loss += loss.item()
             metrics_tracker.update(outputs, batch_y)
-
-            # Update progress bar
             progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
         avg_loss = total_loss / len(self.test_loader)
@@ -221,7 +344,7 @@ class Trainer:
             filename: Checkpoint filename
         """
         checkpoint_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -247,6 +370,12 @@ class Trainer:
             # Train epoch
             train_loss, train_accuracy = self.train_epoch()
 
+            # Update SWA model after swa_start
+            if self.use_swa and epoch >= self.swa_start and self.swa_model is not None:
+                self.swa_model.update_parameters(self.model)
+                if self.swa_scheduler is not None:
+                    self.swa_scheduler.step()
+
             # Validate
             val_metrics = self.validate()
 
@@ -263,13 +392,12 @@ class Trainer:
             )
             self.history.append(epoch_metrics)
 
-            # Learning rate scheduling
+            # Learning rate scheduling (update at end of epoch)
             if self.scheduler is not None:
-                old_lr = self.optimizer.param_groups[0]["lr"]
-                self.scheduler.step(val_metrics["accuracy"])
-                new_lr = self.optimizer.param_groups[0]["lr"]
-                if new_lr != old_lr:
-                    print(f"Learning rate reduced: {old_lr:.6f} -> {new_lr:.6f}")
+                self.scheduler.step()
+                current_lr = self.optimizer.param_groups[0]["lr"]
+                if epoch % 10 == 0:
+                    print(f"Current LR: {current_lr:.6f}")
 
             # Print epoch summary
             print(
@@ -283,20 +411,33 @@ class Trainer:
             if val_metrics["accuracy"] > self.best_val_accuracy:
                 self.best_val_accuracy = val_metrics["accuracy"]
                 self.epochs_without_improvement = 0
-                self.save_checkpoint("latest.pt", is_best=True)
+                if self.save_checkpoints:
+                    self.save_checkpoint("latest.pt", is_best=True)
+                else:
+                    self.best_state = deepcopy(self.model.state_dict())
                 print(f"✓ New best model! Accuracy: {self.best_val_accuracy:.4f}")
             else:
                 self.epochs_without_improvement += 1
-                self.save_checkpoint("latest.pt", is_best=False)
-
-            # Early stopping
-            if self.epochs_without_improvement >= self.patience:
-                print(f"Early stopping after {epoch + 1} epochs")
-                break
+                if self.save_checkpoints:
+                    self.save_checkpoint("latest.pt", is_best=False)
 
         # Load best model for final evaluation
-        self.load_checkpoint("best_model.pt")
-        final_metrics = self.validate()
+        if self.save_checkpoints:
+            self.load_checkpoint("best_model.pt")
+        elif self.best_state is not None:
+            self.model.load_state_dict(self.best_state)
+
+        # Use SWA model for final evaluation if enabled
+        if self.use_swa and self.swa_model is not None:
+            # Update batch norm statistics for SWA model
+            torch.optim.swa_utils.update_bn(self.train_loader, self.swa_model, device=self.device)
+            # Use SWA model for final metrics
+            original_model = self.model
+            self.model = self.swa_model.module
+            final_metrics = self.validate()
+            self.model = original_model  # Restore for checkpoint saving
+        else:
+            final_metrics = self.validate()
 
         return {
             "best_val_accuracy": self.best_val_accuracy,

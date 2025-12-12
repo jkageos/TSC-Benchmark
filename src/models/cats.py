@@ -21,9 +21,7 @@ class PositionalEncoding(nn.Module):
 
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2, dtype=torch.float) * -(math.log(10000.0) / d_model)
-        )
+        div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * -(math.log(10000.0) / d_model))
 
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
@@ -35,21 +33,21 @@ class PositionalEncoding(nn.Module):
 
 
 class TemporalSelfAttention(nn.Module):
-    """Temporal self-attention mechanism for capturing temporal dependencies."""
+    """Temporal self-attention mechanism with Flash Attention support."""
 
-    def __init__(self, d_model: int, num_heads: int = 8):
+    def __init__(self, d_model: int, num_heads: int = 8, use_flash: bool = True):
         super().__init__()
         assert d_model % num_heads == 0
 
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
+        self.use_flash = False  # Disable globally for reproducibility
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
         self.value = nn.Linear(d_model, d_model)
         self.fc_out = nn.Linear(d_model, d_model)
-        self.scale = 1.0 / math.sqrt(self.d_k)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         batch_size = x.shape[0]
@@ -58,12 +56,18 @@ class TemporalSelfAttention(nn.Module):
         K = self.key(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = self.value(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float("-inf"))
+        # Use Flash Attention if available
+        if self.use_flash:
+            context = torch.nn.functional.scaled_dot_product_attention(
+                Q, K, V, attn_mask=mask, dropout_p=0.0, is_causal=False
+            )
+        else:
+            scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+            if mask is not None:
+                scores = scores.masked_fill(mask == 0, float("-inf"))
+            attention = torch.softmax(scores, dim=-1)
+            context = torch.matmul(attention, V)
 
-        attention = torch.softmax(scores, dim=-1)
-        context = torch.matmul(attention, V)
         context = context.transpose(1, 2).reshape(batch_size, -1, self.d_model)
         output = self.fc_out(context)
 
@@ -71,21 +75,22 @@ class TemporalSelfAttention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    """Cross-attention between two sequences."""
+    """Cross-attention with Flash Attention support."""
 
-    def __init__(self, d_model: int, num_heads: int = 8):
+    def __init__(self, d_model: int, num_heads: int = 8, use_flash: bool = True):
         super().__init__()
         assert d_model % num_heads == 0
 
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
+        # Disable Flash for CrossAttention (standard attention only)
+        self.use_flash = False
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
         self.value = nn.Linear(d_model, d_model)
         self.fc_out = nn.Linear(d_model, d_model)
-        self.scale = 1.0 / math.sqrt(self.d_k)
 
     def forward(
         self,
@@ -100,12 +105,13 @@ class CrossAttention(nn.Module):
         K = self.key(key).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = self.value(value).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+        # Standard attention only (no Flash) for stability
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         if mask is not None:
             scores = scores.masked_fill(mask == 0, float("-inf"))
-
         attention = torch.softmax(scores, dim=-1)
         context = torch.matmul(attention, V)
+
         context = context.transpose(1, 2).reshape(batch_size, -1, self.d_model)
         output = self.fc_out(context)
 
@@ -126,9 +132,7 @@ class CATSEncoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout2 = nn.Dropout(dropout)
 
-        self.feed_forward = nn.Sequential(
-            nn.Linear(d_model, d_ff), nn.ReLU(), nn.Linear(d_ff, d_model)
-        )
+        self.feed_forward = nn.Sequential(nn.Linear(d_model, d_ff), nn.ReLU(), nn.Linear(d_ff, d_model))
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout3 = nn.Dropout(dropout)
 
@@ -152,6 +156,64 @@ class CATSEncoderLayer(nn.Module):
         x = self.norm3(x + self.dropout3(ff_output))
 
         return x
+
+
+class MultiHeadAttention(nn.Module):
+    """Multi-head self-attention with optional Flash Attention."""
+
+    def __init__(self, d_model: int, num_heads: int = 8, use_flash: bool = True):
+        super().__init__()
+        assert d_model % num_heads == 0
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        self.use_flash = False  # Disable globally for reproducibility
+
+        self.query = nn.Linear(d_model, d_model)
+        self.key = nn.Linear(d_model, d_model)
+        self.value = nn.Linear(d_model, d_model)
+        self.fc_out = nn.Linear(d_model, d_model)
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        batch_size = query.shape[0]
+
+        Q = self.query(query).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        K = self.key(key).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        V = self.value(value).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+
+        # Use Flash Attention if available (2-4x faster)
+        if self.use_flash:
+            try:
+                context = torch.nn.functional.scaled_dot_product_attention(
+                    Q, K, V, attn_mask=mask, dropout_p=0.0, is_causal=False
+                )
+            except RuntimeError as e:
+                print(f"⚠️  Flash Attention failed, falling back to standard attention: {e}")
+                self.use_flash = False  # Disable for future calls
+                # Compute standard attention as fallback
+                scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+                if mask is not None:
+                    scores = scores.masked_fill(mask == 0, float("-inf"))
+                attention = torch.softmax(scores, dim=-1)
+                context = torch.matmul(attention, V)
+        else:
+            scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+            if mask is not None:
+                scores = scores.masked_fill(mask == 0, float("-inf"))
+            attention = torch.softmax(scores, dim=-1)
+            context = torch.matmul(attention, V)
+
+        context = context.transpose(1, 2).reshape(batch_size, -1, self.d_model)
+        output = self.fc_out(context)
+
+        return output
 
 
 class CATS(BaseModel):

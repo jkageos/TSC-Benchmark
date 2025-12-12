@@ -78,9 +78,7 @@ class UCRDataLoader:
 
     def load_data(
         self,
-    ) -> Tuple[
-        NDArray[np.float64], NDArray[np.int64], NDArray[np.float64], NDArray[np.int64]
-    ]:
+    ) -> Tuple[NDArray[np.float64], NDArray[np.int64], NDArray[np.float64], NDArray[np.int64]]:
         """
         Load and preprocess UCR dataset.
 
@@ -143,43 +141,24 @@ class UCRDataLoader:
 
         return X_train, y_train, X_test, y_test
 
-    def _normalize(
-        self, X: NDArray[np.float64], fit: bool = False
-    ) -> NDArray[np.float64]:
+    def _normalize(self, X: NDArray[np.float64], fit: bool = False) -> NDArray[np.float64]:
         """
-        Apply z-score normalization to time series data.
+        Apply z-score normalization per sample (not global).
 
-        Args:
-            X: Input data
-            fit: Whether to fit the scaler (True for train, False for test)
-
-        Returns:
-            Normalized data with same shape as input
+        This often works better for TSC than global normalization.
         """
-        original_shape = X.shape
-
-        # Reshape to 2D for StandardScaler: (n_samples, features)
         if X.ndim == 2:
-            # Univariate: (n_samples, length) → already 2D
-            X_reshaped = X
+            # Univariate: normalize each sample independently
+            mean = X.mean(axis=1, keepdims=True)
+            std = X.std(axis=1, keepdims=True) + 1e-8
+            return (X - mean) / std
         else:
-            # Multivariate: (n_samples, n_channels, length) → (n_samples, n_channels * length)
-            X_reshaped = X.reshape(X.shape[0], -1)
+            # Multivariate: normalize each channel per sample
+            mean = X.mean(axis=2, keepdims=True)
+            std = X.std(axis=2, keepdims=True) + 1e-8
+            return (X - mean) / std
 
-        if fit:
-            self.scaler = StandardScaler()
-            X_normalized = self.scaler.fit_transform(X_reshaped)
-        else:
-            if self.scaler is None:
-                raise ValueError("Scaler not fitted. Call with fit=True first.")
-            X_normalized = self.scaler.transform(X_reshaped)
-
-        # Reshape back to original shape
-        return X_normalized.reshape(original_shape)
-
-    def _apply_padding(
-        self, X: NDArray[np.float64], target_length: int
-    ) -> NDArray[np.float64]:
+    def _apply_padding(self, X: NDArray[np.float64], target_length: int) -> NDArray[np.float64]:
         """
         Apply padding or truncation to standardize sequence length.
 
@@ -198,7 +177,7 @@ class UCRDataLoader:
                 return X
             elif current_length > target_length:
                 # Truncate
-                return X[:, :target_length]
+                return np.asarray(X[:, :target_length], dtype=np.float64)
             else:
                 # Pad
                 return self._pad_sequences(X, target_length)
@@ -210,14 +189,12 @@ class UCRDataLoader:
                 return X
             elif current_length > target_length:
                 # Truncate
-                return X[:, :, :target_length]
+                return np.asarray(X[:, :, :target_length], dtype=np.float64)
             else:
                 # Pad
                 return self._pad_sequences(X, target_length)
 
-    def _pad_sequences(
-        self, X: NDArray[np.float64], target_length: int
-    ) -> NDArray[np.float64]:
+    def _pad_sequences(self, X: NDArray[np.float64], target_length: int) -> NDArray[np.float64]:
         """
         Pad sequences to target length using specified strategy.
 
@@ -278,6 +255,7 @@ class UCRDataLoader:
             shuffle=shuffle_train,
             num_workers=num_workers,
             pin_memory=True,
+            persistent_workers=num_workers > 0,
         )
 
         test_loader: DataLoader[Tuple[torch.Tensor, torch.Tensor]] = DataLoader(
@@ -286,6 +264,7 @@ class UCRDataLoader:
             shuffle=False,
             num_workers=num_workers,
             pin_memory=True,
+            persistent_workers=num_workers > 0,
         )
 
         return train_loader, test_loader

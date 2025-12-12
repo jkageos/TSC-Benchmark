@@ -35,7 +35,7 @@ packages = ["src"]
 target-version = ["py313"]
 
 [tool.ruff]
-line-length = "120"
+line-length = 120
 target-version = "py313"
 select = ["E", "F", "W", "I"]
 

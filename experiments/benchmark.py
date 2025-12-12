@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 
 from src.data.loader import load_ucr_dataset
 from src.training.trainer import Trainer
@@ -60,8 +61,7 @@ def get_available_memory() -> float:
     Returns:
         Available memory in GB
     """
-    if not torch.cuda.is_available():
-        return float("inf")
+    # CUDA is required, so this will always be available
     return torch.cuda.mem_get_info()[0] / 1e9
 
 
@@ -134,33 +134,56 @@ def benchmark_model_on_dataset(
 ) -> dict[str, Any]:
     """
     Benchmark a single model on a single dataset.
-
-    Args:
-        model_name: Name of the model to benchmark
-        dataset_name: Name of the dataset
-        config: Configuration dictionary
-        results_dir: Directory to save results
-
-    Returns:
-        Dictionary with benchmark results
+    Uses k-fold cross-validation for small datasets (n_train < 300).
     """
     # Clear CUDA memory before starting
     clear_cuda_memory()
+
+    # Dataset-specific overrides (no skipping)
+    dataset_overrides = config.get("dataset_overrides", {}).get(dataset_name, {})
 
     print(f"\n{'=' * 80}")
     print(f"Benchmarking {model_name.upper()} on {dataset_name}")
     print(f"{'=' * 80}\n")
 
-    # Load dataset
+    # Load dataset with overrides
     training_config = get_training_config(config)
+
+    if training_config.get("device") == "cpu":
+        training_config["device"] = "cuda"
+    elif "device" not in training_config:
+        training_config["device"] = "cuda"
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required but not available. Please install PyTorch with CUDA support.")
+
+    # Apply dataset-specific overrides
+    max_length = dataset_overrides.get("max_length", training_config["max_length"])
+    batch_size = dataset_overrides.get("batch_size", training_config["batch_size"])
+    epochs = dataset_overrides.get("epochs", training_config["epochs"])
+    patience = dataset_overrides.get("patience", training_config["patience"])
+    num_workers = dataset_overrides.get("num_workers", training_config.get("num_workers", 0))
+
+    if dataset_overrides:
+        print(f"📋 Applying dataset-specific overrides for {dataset_name}:")
+        if max_length != training_config["max_length"]:
+            print(f"   max_length: {training_config['max_length']} → {max_length}")
+        if batch_size != training_config["batch_size"]:
+            print(f"   batch_size: {training_config['batch_size']} → {batch_size}")
+        if epochs != training_config["epochs"]:
+            print(f"   epochs: {training_config['epochs']} → {epochs}")
+        if patience != training_config["patience"]:
+            print(f"   patience: {training_config['patience']} → {patience}")
+        print()
 
     try:
         train_loader, test_loader, dataset_info = load_ucr_dataset(
             dataset_name=dataset_name,
-            batch_size=training_config["batch_size"],
+            batch_size=batch_size,
             normalize=training_config["normalize"],
             padding=training_config["padding"],
-            max_length=training_config["max_length"],
+            max_length=max_length,
+            num_workers=num_workers,
         )
     except Exception as e:
         print(f"Error loading dataset {dataset_name}: {e}")
@@ -174,30 +197,94 @@ def benchmark_model_on_dataset(
     print(f"  Train Samples: {dataset_info['n_train']}")
     print(f"  Test Samples: {dataset_info['n_test']}\n")
 
-    # Calculate optimal batch size based on model and sequence length
-    adjusted_batch_size = get_optimal_batch_size(
-        model_name=model_name,
-        sequence_length=dataset_info["sequence_length"],
-        input_channels=dataset_info["n_channels"],
-        num_classes=dataset_info["n_classes"],
-        base_batch_size=training_config["batch_size"],
-    )
+    # Determine if cross-validation should be used
+    use_cross_val = dataset_info["n_train"] < 300
+    if use_cross_val:
+        print(f"📊 Small dataset detected ({dataset_info['n_train']} train samples)")
+        print(f"   Using 5-fold stratified cross-validation\n")
 
-    if adjusted_batch_size != training_config["batch_size"]:
-        print(f"⚠️  Adjusting batch size for memory optimization")
-        print(f"   Original: {training_config['batch_size']} → Adjusted: {adjusted_batch_size}\n")
-
-        # Reload dataloaders with adjusted batch size
-        train_loader, test_loader, dataset_info = load_ucr_dataset(
+        result = benchmark_model_with_cross_validation(
+            model_name=model_name,
             dataset_name=dataset_name,
-            batch_size=adjusted_batch_size,
-            normalize=training_config["normalize"],
-            padding=training_config["padding"],
-            max_length=training_config["max_length"],
+            config=config,
+            dataset_info=dataset_info,
+            training_config=training_config,
+            dataset_overrides=dataset_overrides,
+            k_folds=dataset_overrides.get("cv_folds", training_config.get("cv_folds", 3)),
         )
+    else:
+        # Standard train/test split
+        print(f"📈 Larger dataset ({dataset_info['n_train']} train samples)")
+        print(f"   Using standard train/test split\n")
+
+        adjusted_batch_size = get_optimal_batch_size(
+            model_name=model_name,
+            sequence_length=dataset_info["sequence_length"],
+            input_channels=dataset_info["n_channels"],
+            num_classes=dataset_info["n_classes"],
+            base_batch_size=batch_size,
+        )
+
+        if adjusted_batch_size != batch_size:
+            print(f"⚠️  Adjusting batch size for memory optimization")
+            print(f"   Original: {batch_size} → Adjusted: {adjusted_batch_size}\n")
+
+            train_loader, test_loader, dataset_info = load_ucr_dataset(
+                dataset_name=dataset_name,
+                batch_size=adjusted_batch_size,
+                normalize=training_config["normalize"],
+                padding=training_config["padding"],
+                max_length=max_length,
+                num_workers=num_workers,
+            )
+
+        result = benchmark_model_standard(
+            model_name=model_name,
+            dataset_name=dataset_name,
+            config=config,
+            dataset_info=dataset_info,
+            training_config=training_config,
+            train_loader=train_loader,
+            test_loader=test_loader,
+            dataset_overrides=dataset_overrides,
+            results_dir=results_dir,
+        )
+
+    # Clean up memory
+    clear_cuda_memory()
+    return result
+
+
+def benchmark_model_standard(
+    model_name: str,
+    dataset_name: str,
+    config: dict[str, Any],
+    dataset_info: dict[str, Any],
+    training_config: dict[str, Any],
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    dataset_overrides: dict[str, Any],
+    results_dir: Path,
+) -> dict[str, Any]:
+    """
+    Standard benchmark with train/test split (for larger datasets).
+    """
+    batch_size = train_loader.batch_size or 32
+    epochs = dataset_overrides.get("epochs", training_config["epochs"])
+    patience = dataset_overrides.get("patience", training_config["patience"])
 
     # Create model
     model_config = get_model_config(config, model_name)
+    dataset_model_overrides = dataset_overrides.get("models", {}).get(model_name, {})
+
+    if dataset_model_overrides:
+        print(f"📋 Applying model-specific overrides for {model_name} on {dataset_name}:")
+        for key, value in dataset_model_overrides.items():
+            old_value = model_config.get(key, "not set")
+            model_config[key] = value
+            print(f"   {key}: {old_value} → {value}")
+        print()
+
     model = create_model(
         model_name=model_name,
         model_config=model_config,
@@ -214,8 +301,23 @@ def benchmark_model_on_dataset(
         **training_config.get("optimizer_params", {}),
     )
 
-    # Loss function
-    criterion = nn.CrossEntropyLoss()
+    # Loss function with class weights
+    n_train = dataset_info["n_train"]
+    if n_train > 1000:
+        label_smoothing = 0.1
+    elif n_train > 200:
+        label_smoothing = 0.05
+    else:
+        label_smoothing = 0.0
+
+    class_counts = torch.zeros(dataset_info["n_classes"], dtype=torch.long)
+    for _, batch_y in train_loader:
+        for c in batch_y.unique():
+            class_counts[c] += (batch_y == c).sum()
+
+    ratio = class_counts.max().float() / class_counts.clamp(min=1).float()
+    class_weights = ratio.to("cuda")
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
 
     # Create checkpoint directory
     checkpoint_dir = results_dir / "checkpoints" / f"{model_name}_{dataset_name}"
@@ -228,23 +330,31 @@ def benchmark_model_on_dataset(
         optimizer=optimizer,
         criterion=criterion,
         num_classes=dataset_info["n_classes"],
-        epochs=training_config["epochs"],
-        patience=training_config["patience"],
+        epochs=epochs,
+        patience=patience,
         device=training_config["device"],
         checkpoint_dir=str(checkpoint_dir),
         use_scheduler=training_config["use_scheduler"],
+        warmup_epochs=training_config["warmup_epochs"],
+        use_amp=training_config.get("use_amp", True),
+        use_compile=training_config.get("use_compile", True),
+        compile_mode=config.get("hardware", {}).get("compile_mode", "default"),
+        use_augmentation=config["training"].get("use_augmentation", True),
+        augmentation_params=config["training"].get("augmentation_params", {}),
+        use_tta=training_config.get("use_tta", False),
+        tta_augmentations=training_config.get("tta_augmentations", 5),
+        use_swa=training_config.get("use_swa", False),
+        swa_start=training_config.get("swa_start", 60),
+        save_checkpoints=config["results"].get("save_checkpoints", True),
     )
 
     try:
-        # Train model
         results = trainer.train()
 
-        # Save training history
         if config["results"]["save_history"]:
             history_file = results_dir / f"{model_name}_{dataset_name}_history.json"
             trainer.save_training_history(str(history_file))
 
-        # Prepare results
         benchmark_results = {
             "model": model_name,
             "dataset": dataset_name,
@@ -253,32 +363,196 @@ def benchmark_model_on_dataset(
             "total_epochs": results["total_epochs"],
             "final_metrics": results["final_metrics"],
             "timestamp": datetime.now().isoformat(),
-            "batch_size": adjusted_batch_size,
+            "batch_size": batch_size,
+            "config_overrides": dataset_overrides,
+            "evaluation_method": "train/test split",
         }
 
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
             print(f"\n❌ CUDA Out of Memory Error!")
             print(f"   Dataset: {dataset_name} (seq_len={dataset_info['sequence_length']})")
-            print(f"   Model: {model_name} with batch_size={adjusted_batch_size}")
+            print(f"   Model: {model_name} with batch_size={batch_size}")
             print(f"   Error: {str(e)[:100]}...\n")
             benchmark_results = {
                 "model": model_name,
                 "dataset": dataset_name,
                 "error": f"CUDA OOM",
                 "sequence_length": dataset_info["sequence_length"],
-                "batch_size": adjusted_batch_size,
+                "batch_size": batch_size,
             }
         else:
             raise e
     finally:
-        # Clean up memory
         del model
         del optimizer
         del trainer
         del train_loader
         del test_loader
-        clear_cuda_memory()
+
+    return benchmark_results
+
+
+def benchmark_model_with_cross_validation(
+    model_name: str,
+    dataset_name: str,
+    config: dict[str, Any],
+    dataset_info: dict[str, Any],
+    training_config: dict[str, Any],
+    dataset_overrides: dict[str, Any],
+    k_folds: int = 3,
+) -> dict[str, Any]:
+    """
+    Benchmark using k-fold cross-validation (for small datasets).
+    More robust evaluation when training data is limited.
+    """
+    from experiments.cross_validate import cross_validate_dataset
+    from src.data.loader import UCRDataLoader
+
+    # Load full dataset for cross-validation
+    loader = UCRDataLoader(
+        dataset_name=dataset_name,
+        normalize=training_config["normalize"],
+        padding=training_config["padding"],
+        max_length=dataset_overrides.get("max_length", training_config["max_length"]),
+    )
+
+    X_train, y_train, X_test, y_test = loader.load_data()
+
+    # Combine train and test for full cross-validation
+    X_full = np.concatenate([X_train, X_test])
+    y_full = np.concatenate([y_train, y_test])
+
+    # Model and optimizer factory functions
+    model_config = get_model_config(config, model_name)
+    dataset_model_overrides = dataset_overrides.get("models", {}).get(model_name, {})
+
+    if dataset_model_overrides:
+        print(f"📋 Applying model-specific overrides for {model_name}:")
+        for key, value in dataset_model_overrides.items():
+            old_value = model_config.get(key, "not set")
+            model_config[key] = value
+            print(f"   {key}: {old_value} → {value}")
+        print()
+
+    def create_model_fn():
+        return create_model(
+            model_name=model_name,
+            model_config=model_config,
+            num_classes=dataset_info["n_classes"],
+            input_length=dataset_info["sequence_length"],
+            input_channels=dataset_info["n_channels"],
+        )
+
+    def create_optimizer_fn(model):
+        return create_optimizer(
+            model=model,
+            optimizer_name=training_config["optimizer"],
+            learning_rate=training_config["learning_rate"],
+            **training_config.get("optimizer_params", {}),
+        )
+
+    # Loss function
+    n_total = len(X_full)
+    if n_total > 1000:
+        label_smoothing = 0.1
+    elif n_total > 200:
+        label_smoothing = 0.05
+    else:
+        label_smoothing = 0.0
+
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+
+    # Cross-validation parameters with small-dataset optimizations
+    cv_epochs = dataset_overrides.get("epochs", training_config["epochs"])
+    cv_patience = dataset_overrides.get("patience", training_config["patience"])
+    cv_batch_size = dataset_overrides.get("batch_size", training_config["batch_size"])
+    cv_num_workers = dataset_overrides.get("num_workers", training_config.get("num_workers", 0))
+
+    # For very small datasets, reduce epochs and disable expensive augmentations
+    n_train_per_fold = len(X_full) // k_folds
+    use_tta_cv = training_config.get("use_tta", False)
+    use_swa_cv = training_config.get("use_swa", False)
+
+    if n_train_per_fold < 100:
+        # Tiny dataset: reduce epochs significantly
+        cv_epochs = min(cv_epochs, 50)
+        cv_patience = min(cv_patience, 10)
+        use_tta_cv = False  # Disable TTA for speed (too expensive for tiny datasets)
+        use_swa_cv = False  # Disable SWA for tiny datasets
+        print(f"⚡ Ultra-small fold size ({n_train_per_fold} samples/fold)")
+        print(f"   Reducing epochs: {training_config['epochs']} → {cv_epochs}")
+        print(f"   Disabling TTA and SWA for speed\n")
+    elif n_train_per_fold < 200:
+        # Small dataset: reduce epochs moderately
+        cv_epochs = min(cv_epochs, 75)
+        cv_patience = min(cv_patience, 15)
+        use_tta_cv = False  # Still disable TTA
+        use_swa_cv = False
+        print(f"⚡ Small fold size ({n_train_per_fold} samples/fold)")
+        print(f"   Reducing epochs: {training_config['epochs']} → {cv_epochs}")
+        print(f"   Disabling TTA for speed\n")
+
+    try:
+        cv_results = cross_validate_dataset(
+            model_fn=create_model_fn,
+            X=X_full,
+            y=y_full,
+            optimizer_fn=create_optimizer_fn,
+            criterion=criterion,
+            num_classes=dataset_info["n_classes"],
+            k_folds=k_folds,
+            batch_size=cv_batch_size,
+            epochs=cv_epochs,
+            patience=cv_patience,
+            device=training_config["device"],
+            use_scheduler=training_config["use_scheduler"],
+            warmup_epochs=training_config["warmup_epochs"],
+            use_amp=training_config.get("use_amp", True),
+            use_augmentation=config["training"].get("use_augmentation", True),
+            augmentation_params=config["training"].get("augmentation_params", {}),
+            num_workers=cv_num_workers,
+            use_tta=use_tta_cv,
+            tta_augmentations=training_config.get("tta_augmentations", 5),
+            use_swa=use_swa_cv,
+            swa_start=training_config.get("swa_start", 60),
+            use_compile=training_config.get("use_compile", True),
+            compile_mode=config.get("hardware", {}).get("compile_mode", "default"),
+            save_checkpoints=config["results"].get("save_checkpoints", True),
+        )
+
+        benchmark_results = {
+            "model": model_name,
+            "dataset": dataset_name,
+            "dataset_info": dataset_info,
+            "cv_mean_accuracy": cv_results["mean_accuracy"],
+            "cv_std_accuracy": cv_results["std_accuracy"],
+            "cv_mean_f1": cv_results["mean_f1"],
+            "cv_std_f1": cv_results["std_f1"],
+            "k_folds": k_folds,
+            "timestamp": datetime.now().isoformat(),
+            "batch_size": cv_batch_size,
+            "config_overrides": dataset_overrides,
+            "evaluation_method": f"{k_folds}-fold cross-validation",
+        }
+
+        print(f"\n✅ Cross-Validation Results for {model_name} on {dataset_name}:")
+        print(f"   Mean Accuracy: {cv_results['mean_accuracy']:.4f} ± {cv_results['std_accuracy']:.4f}")
+        print(f"   Mean F1: {cv_results['mean_f1']:.4f} ± {cv_results['std_f1']:.4f}\n")
+
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            print(f"\n❌ CUDA Out of Memory during cross-validation!")
+            print(f"   Dataset: {dataset_name}")
+            print(f"   Model: {model_name}\n")
+            benchmark_results = {
+                "model": model_name,
+                "dataset": dataset_name,
+                "error": "CUDA OOM during cross-validation",
+                "evaluation_method": "cross-validation",
+            }
+        else:
+            raise e
 
     return benchmark_results
 
@@ -358,25 +632,22 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
 
 
 def generate_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """
-    Generate summary statistics from benchmark results.
-
-    Args:
-        results: List of benchmark results
-
-    Returns:
-        Summary dictionary
-    """
+    """Generate summary statistics from benchmark results."""
     summary: dict[str, Any] = {
         "total_experiments": len(results),
         "successful_runs": 0,
         "failed_runs": 0,
+        "skipped_runs": 0,
         "by_model": {},
         "by_dataset": {},
     }
 
     # Aggregate by model
     for result in results:
+        if "skipped" in result:
+            summary["skipped_runs"] += 1
+            continue
+
         if "error" in result:
             summary["failed_runs"] += 1
             continue
@@ -384,7 +655,14 @@ def generate_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         summary["successful_runs"] += 1
         model = result["model"]
         dataset = result["dataset"]
-        accuracy = result["best_val_accuracy"]
+
+        # Handle both train/test and cross-validation results
+        if "best_val_accuracy" in result:
+            accuracy = result["best_val_accuracy"]
+        elif "cv_mean_accuracy" in result:
+            accuracy = result["cv_mean_accuracy"]
+        else:
+            continue
 
         # By model
         if model not in summary["by_model"]:
@@ -410,17 +688,13 @@ def generate_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def print_summary(summary: dict[str, Any]) -> None:
-    """
-    Print benchmark summary to console.
-
-    Args:
-        summary: Summary dictionary
-    """
+    """Print benchmark summary to console."""
     print("\nBenchmark Summary")
     print("-" * 80)
 
     print(f"\nTotal Experiments: {summary['total_experiments']}")
     print(f"Successful: {summary['successful_runs']}")
+    print(f"Skipped: {summary['skipped_runs']}")
     print(f"Failed: {summary['failed_runs']}")
 
     print("\nResults by Model:")
@@ -433,4 +707,8 @@ def print_summary(summary: dict[str, Any]) -> None:
 
 
 if __name__ == "__main__":
+    import torch
+
+    torch.backends.cudnn.benchmark = True
+
     run_benchmark()

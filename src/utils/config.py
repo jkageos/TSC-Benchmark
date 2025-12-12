@@ -103,9 +103,7 @@ def create_model(
     }
 
     if model_name.lower() not in model_registry:
-        raise ValueError(
-            f"Unknown model: {model_name}. Available models: {list(model_registry.keys())}"
-        )
+        raise ValueError(f"Unknown model: {model_name}. Available models: {list(model_registry.keys())}")
 
     model_class = model_registry[model_name.lower()]
 
@@ -146,8 +144,7 @@ def create_optimizer(
 
     if optimizer_name.lower() not in optimizer_registry:
         raise ValueError(
-            f"Unknown optimizer: {optimizer_name}. "
-            f"Available optimizers: {list(optimizer_registry.keys())}"
+            f"Unknown optimizer: {optimizer_name}. Available optimizers: {list(optimizer_registry.keys())}"
         )
 
     optimizer_class = optimizer_registry[optimizer_name.lower()]
