@@ -34,6 +34,12 @@ logs/
 *.json
 *.pkl
 
+# Keep per-run summary.json files and the results folder itself
+!results/
+!results/**/
+!results/**/summary.json
+!results/.gitkeep
+
 # Data preprocessing cache
 data/processed/
 data/cache/
