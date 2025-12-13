@@ -1,0 +1,123 @@
+dataset_overrides:
+  Beef:
+    batch_size: 16
+    epochs: 150
+    models:
+      cats:
+        d_model: 96
+        num_heads: 3
+        num_layers: 2
+      fcn:
+        dropout_rate: 0.2
+        hidden_dims:
+        - 512
+        - 256
+        - 128
+      transformer:
+        d_model: 96
+        num_heads: 3
+        num_layers: 2
+    patience: 25
+  ChlorineConcentration:
+    batch_size: 32
+    models:
+      autoformer:
+        factor: 1
+      cats:
+        d_model: 128
+        num_heads: 4
+        num_layers: 1
+      transformer:
+        d_model: 128
+        num_heads: 4
+        num_layers: 1
+  KeplerLightCurves:
+    batch_size: 32
+    epochs: 50
+    max_length: 512
+    patience: 10
+    skip_models: []
+datasets:
+- Adiac
+- ArrowHead
+- Beef
+- Car
+- ChlorineConcentration
+- CinCECGTorso
+- FiftyWords
+- HouseTwenty
+- KeplerLightCurves
+models:
+  autoformer:
+    d_ff: 512
+    d_model: 128
+    dropout: 0.1
+    factor: 1
+    max_seq_len: 5000
+    num_heads: 4
+    num_layers: 2
+  cats:
+    d_ff: 512
+    d_model: 128
+    dropout: 0.1
+    max_seq_len: 5000
+    num_heads: 4
+    num_layers: 2
+  cnn:
+    dropout_rate: 0.2
+    kernel_size: 3
+    num_filters:
+    - 64
+    - 128
+    - 256
+  fcn:
+    dropout_rate: 0.3
+    hidden_dims:
+    - 1024
+    - 512
+    - 256
+    - 128
+    use_batch_norm: true
+  patchtst:
+    d_ff: 512
+    d_model: 128
+    dropout: 0.1
+    num_heads: 4
+    num_layers: 2
+    patch_len: 16
+    stride: 8
+  transformer:
+    d_ff: 512
+    d_model: 128
+    dropout: 0.1
+    max_seq_len: 5000
+    num_heads: 4
+    num_layers: 2
+results:
+  output_dir: results
+  save_checkpoints: false
+  save_history: true
+seed: 42
+training:
+  batch_size: 64
+  device: cuda
+  epochs: 100
+  gradient_clip: 1.0
+  learning_rate: 0.001
+  max_length: null
+  normalize: true
+  optimizer: adamw
+  optimizer_params:
+    betas:
+    - 0.9
+    - 0.999
+    weight_decay: 0.0001
+  padding: repeat
+  patience: 15
+  use_amp: true
+  use_augmentation: false
+  use_compile: false
+  use_scheduler: true
+  use_swa: false
+  use_tta: false
+  warmup_epochs: 5

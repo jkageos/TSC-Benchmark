@@ -1,0 +1,238 @@
+{
+  "total_experiments": 54,
+  "successful_runs": 54,
+  "failed_runs": 0,
+  "skipped_runs": 0,
+  "by_model": {
+    "fcn": {
+      "accuracies": [
+        0.8005115089514067,
+        0.8457142857142858,
+        0.7333333333333333,
+        0.8,
+        0.8799479166666667,
+        0.8746376811594203,
+        0.6879120879120879,
+        0.7394957983193278,
+        0.5614035087719298
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7692173467587176,
+      "std_accuracy": 0.09610269579456654
+    },
+    "cnn": {
+      "accuracies": [
+        0.6035805626598465,
+        0.6342857142857142,
+        0.6333333333333333,
+        0.6166666666666667,
+        0.8700520833333333,
+        0.9768115942028985,
+        0.7384615384615385,
+        0.9159663865546218,
+        0.8972431077694235
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7651556652519306,
+      "std_accuracy": 0.14117152729097987
+    },
+    "transformer": {
+      "accuracies": [
+        0.6726342710997443,
+        0.7257142857142858,
+        0.7333333333333333,
+        0.8333333333333334,
+        0.5325520833333334,
+        0.7876811594202898,
+        0.701098901098901,
+        0.8907563025210085,
+        0.6842105263157895
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7290349106855576,
+      "std_accuracy": 0.09722655940173477
+    },
+    "cats": {
+      "accuracies": [
+        0.04092071611253197,
+        0.3942857142857143,
+        0.6666666666666666,
+        0.7166666666666667,
+        0.5408854166666667,
+        0.8442028985507246,
+        0.7164835164835165,
+        0.8823529411764706,
+        0.7794486215538847
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.6202125731292047,
+      "std_accuracy": 0.24897336447595597
+    },
+    "autoformer": {
+      "accuracies": [
+        0.1918158567774936,
+        0.72,
+        0.4666666666666667,
+        0.6166666666666667,
+        0.43125,
+        0.7855072463768116,
+        0.512087912087912,
+        0.8739495798319328,
+        0.7393483709273183
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.5930324777038669,
+      "std_accuracy": 0.20102993418916024
+    },
+    "patchtst": {
+      "accuracies": [
+        0.6112531969309463,
+        0.6057142857142858,
+        0.4,
+        0.8,
+        0.5325520833333334,
+        0.9144927536231884,
+        0.7296703296703296,
+        0.865546218487395,
+        0.8120300751879699
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.6968065492163832,
+      "std_accuracy": 0.16040108431328134
+    }
+  },
+  "by_dataset": {
+    "Adiac": {
+      "fcn": 0.8005115089514067,
+      "cnn": 0.6035805626598465,
+      "transformer": 0.6726342710997443,
+      "cats": 0.04092071611253197,
+      "autoformer": 0.1918158567774936,
+      "patchtst": 0.6112531969309463
+    },
+    "ArrowHead": {
+      "fcn": 0.8457142857142858,
+      "cnn": 0.6342857142857142,
+      "transformer": 0.7257142857142858,
+      "cats": 0.3942857142857143,
+      "autoformer": 0.72,
+      "patchtst": 0.6057142857142858
+    },
+    "Beef": {
+      "fcn": 0.7333333333333333,
+      "cnn": 0.6333333333333333,
+      "transformer": 0.7333333333333333,
+      "cats": 0.6666666666666666,
+      "autoformer": 0.4666666666666667,
+      "patchtst": 0.4
+    },
+    "Car": {
+      "fcn": 0.8,
+      "cnn": 0.6166666666666667,
+      "transformer": 0.8333333333333334,
+      "cats": 0.7166666666666667,
+      "autoformer": 0.6166666666666667,
+      "patchtst": 0.8
+    },
+    "ChlorineConcentration": {
+      "fcn": 0.8799479166666667,
+      "cnn": 0.8700520833333333,
+      "transformer": 0.5325520833333334,
+      "cats": 0.5408854166666667,
+      "autoformer": 0.43125,
+      "patchtst": 0.5325520833333334
+    },
+    "CinCECGTorso": {
+      "fcn": 0.8746376811594203,
+      "cnn": 0.9768115942028985,
+      "transformer": 0.7876811594202898,
+      "cats": 0.8442028985507246,
+      "autoformer": 0.7855072463768116,
+      "patchtst": 0.9144927536231884
+    },
+    "FiftyWords": {
+      "fcn": 0.6879120879120879,
+      "cnn": 0.7384615384615385,
+      "transformer": 0.701098901098901,
+      "cats": 0.7164835164835165,
+      "autoformer": 0.512087912087912,
+      "patchtst": 0.7296703296703296
+    },
+    "HouseTwenty": {
+      "fcn": 0.7394957983193278,
+      "cnn": 0.9159663865546218,
+      "transformer": 0.8907563025210085,
+      "cats": 0.8823529411764706,
+      "autoformer": 0.8739495798319328,
+      "patchtst": 0.865546218487395
+    },
+    "KeplerLightCurves": {
+      "fcn": 0.5614035087719298,
+      "cnn": 0.8972431077694235,
+      "transformer": 0.6842105263157895,
+      "cats": 0.7794486215538847,
+      "autoformer": 0.7393483709273183,
+      "patchtst": 0.8120300751879699
+    }
+  }
+}
