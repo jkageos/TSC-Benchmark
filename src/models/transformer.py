@@ -49,12 +49,12 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, d_model: int, num_heads: int = 8, use_flash: bool = True):
         super().__init__()
-        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
-
+        assert d_model % num_heads == 0
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
-        self.use_flash = False  # Disable globally for reproducibility
+        # Enable Flash Attention when CUDA is available
+        self.use_flash = use_flash and torch.cuda.is_available()
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
@@ -93,8 +93,7 @@ class MultiHeadAttention(nn.Module):
                 )
             except RuntimeError as e:
                 print(f"⚠️  Flash Attention failed, falling back to standard attention: {e}")
-                self.use_flash = False  # Disable for future calls
-                # Compute standard attention as fallback
+                self.use_flash = False
                 scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
                 if mask is not None:
                     scores = scores.masked_fill(mask == 0, float("-inf"))

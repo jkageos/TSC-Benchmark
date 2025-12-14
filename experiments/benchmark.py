@@ -52,6 +52,10 @@ def clear_cuda_memory() -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+        # Force garbage collection
+        import gc
+
+        gc.collect()
 
 
 def get_available_memory() -> float:
@@ -564,6 +568,12 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
     Args:
         config_path: Path to configuration file
     """
+    # Enable performance features on CUDA
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
+
     # Load and validate config
     config = load_config(config_path)
     validate_config(config)
@@ -640,6 +650,7 @@ def generate_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "skipped_runs": 0,
         "by_model": {},
         "by_dataset": {},
+        "failures": [],  # Track individual failures
     }
 
     # Aggregate by model
@@ -650,6 +661,14 @@ def generate_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
         if "error" in result:
             summary["failed_runs"] += 1
+            # Record failure details
+            summary["failures"].append(
+                {
+                    "model": result.get("model"),
+                    "dataset": result.get("dataset"),
+                    "error": result.get("error"),
+                }
+            )
             continue
 
         summary["successful_runs"] += 1

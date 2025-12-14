@@ -159,7 +159,7 @@ dataset_overrides:
         num_layers: 3
     patience: 8
   CinCECGTorso:
-    batch_size: 8
+    batch_size: 16
     epochs: 60
     models:
       autoformer:
@@ -170,16 +170,15 @@ dataset_overrides:
         num_layers: 2
     patience: 8
   FiftyWords:
-    batch_size: 16
-    epochs: 60
-    max_length: 512
+    batch_size: 32
+    epochs: 80
     models:
       autoformer:
-        d_ff: 512
-        d_model: 128
-        dropout: 0.15
+        d_ff: 1024
+        d_model: 256
+        dropout: 0.1
         num_heads: 4
-        num_layers: 2
+        num_layers: 3
       cats:
         d_ff: 1024
         d_model: 256
@@ -198,9 +197,9 @@ dataset_overrides:
         dropout: 0.08
         num_heads: 4
         num_layers: 3
-    patience: 8
+    patience: 12
   HouseTwenty:
-    batch_size: 16
+    batch_size: 32
     epochs: 60
     models:
       autoformer:

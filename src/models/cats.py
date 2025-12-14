@@ -38,11 +38,11 @@ class TemporalSelfAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int = 8, use_flash: bool = True):
         super().__init__()
         assert d_model % num_heads == 0
-
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
-        self.use_flash = False  # Disable globally for reproducibility
+        # Enable Flash Attention on CUDA
+        self.use_flash = use_flash and torch.cuda.is_available()
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
@@ -164,11 +164,11 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int = 8, use_flash: bool = True):
         super().__init__()
         assert d_model % num_heads == 0
-
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
-        self.use_flash = False  # Disable globally for reproducibility
+        # Enable Flash Attention on CUDA
+        self.use_flash = use_flash and torch.cuda.is_available()
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)

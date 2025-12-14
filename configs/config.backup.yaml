@@ -1,0 +1,165 @@
+# TSC-Benchmark Configuration with torch.compile Support
+
+# Target datasets for benchmarking
+datasets:
+  - Adiac
+  - ArrowHead
+  - Beef
+  - Car
+  - ChlorineConcentration
+  - CinCECGTorso
+  - FiftyWords
+  - HouseTwenty
+  - KeplerLightCurves
+
+# Model configurations
+models:
+  fcn:
+    hidden_dims: [512, 256, 128]
+    dropout_rate: 0.2
+    use_batch_norm: true
+
+  cnn:
+    num_filters: [64, 128, 256]
+    kernel_size: 3
+    dropout_rate: 0.2
+
+  transformer:
+    d_model: 128
+    num_heads: 4
+    num_layers: 2
+    d_ff: 512
+    dropout: 0.1
+    max_seq_len: 5000
+
+  cats:
+    d_model: 128
+    num_heads: 4
+    num_layers: 2
+    d_ff: 512
+    dropout: 0.1
+    max_seq_len: 5000
+
+  autoformer:
+    d_model: 128
+    num_heads: 4
+    num_layers: 2
+    d_ff: 512
+    dropout: 0.1
+    factor: 1
+    max_seq_len: 5000
+
+  patchtst:
+    d_model: 128
+    num_heads: 4
+    num_layers: 2
+    d_ff: 512
+    dropout: 0.1
+    patch_len: 16
+    stride: 8
+
+# Training configuration
+training:
+  epochs: 100
+  batch_size: 64
+  learning_rate: 0.0005
+  patience: 15
+  use_scheduler: true
+  warmup_epochs: 10
+  use_amp: true
+  use_compile: true  # Enable on Linux with torch.compile support
+  use_augmentation: true
+  augmentation_params:
+    jitter_strength: 0.05
+    scale_range: [0.9, 1.1]
+    magnitude_warp_strength: 0.15
+    prob: 0.8
+  use_tta: true
+  tta_augmentations: 10
+  use_swa: true
+  swa_start: 60
+  normalize: true
+  padding: repeat
+  max_length: null
+  cv_folds: 3
+  num_workers: 2
+
+  # Optimizer configuration
+  optimizer: adamw
+  optimizer_params:
+    weight_decay: 0.00001
+    betas: [0.9, 0.95]
+
+# Dataset-specific overrides
+dataset_overrides:
+  Beef:
+    epochs: 100  # Reduced for CV (n_train=30)
+    batch_size: 8
+    patience: 10
+    models:
+      cnn:
+        num_filters: [32, 64, 128]
+        kernel_size: 5
+        dropout_rate: 0.1
+      transformer:
+        d_model: 64
+        num_heads: 4
+        num_layers: 3
+        d_ff: 256
+  Car:
+    epochs: 100  # Reduced (n_train=60)
+    patience: 10
+    batch_size: 8
+    models:
+      fcn:
+        hidden_dims: [512, 256]
+        dropout_rate: 0.25
+  CinCECGTorso:
+    batch_size: 32
+  KeplerLightCurves:
+    max_length: 256
+    epochs: 50
+    patience: 10
+    batch_size: 32
+    models:
+      fcn:
+        dropout_rate: 0.1
+      cnn:
+        num_filters: [128, 256, 512]
+        dropout_rate: 0.3
+  Adiac:
+    max_length: 1024
+    models:
+      transformer:
+        d_model: 256
+        num_layers: 3
+        dropout: 0.05
+      cats:
+        d_model: 256
+        num_layers: 3
+        dropout: 0.05
+  FiftyWords:
+    epochs: 180
+    patience: 40
+    models:
+      transformer:
+        d_model: 192
+        num_layers: 3
+      cats:
+        d_model: 192
+        num_layers: 3
+
+# Results tracking
+results:
+  output_dir: results
+  save_checkpoints: false
+  save_history: true
+
+# Hardware configuration (auto-detected, but can be overridden)
+hardware:
+  device: cuda
+  use_torch_compile: true   # Effective only on Linux; ignored on Windows
+  compile_mode: default  # 'default' or 'reduce-overhead' or 'max-autotune'
+
+# Reproducibility
+seed: 42

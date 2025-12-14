@@ -1,0 +1,246 @@
+{
+  "total_experiments": 54,
+  "successful_runs": 51,
+  "failed_runs": 3,
+  "skipped_runs": 0,
+  "by_model": {
+    "autoformer": {
+      "accuracies": [
+        0.32225063938618925,
+        0.9005365526492287,
+        0.7166666666666667,
+        0.8916666666666667,
+        0.5567708333333333,
+        0.9022556390977443
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7150244996333047,
+      "std_accuracy": 0.21602118008694823
+    },
+    "cats": {
+      "accuracies": [
+        0.2608695652173913,
+        0.8435278336686788,
+        0.6166666666666667,
+        0.75,
+        0.53828125,
+        0.9985920434845958,
+        0.7406593406593407,
+        0.9119496855345912,
+        0.7819548872180451
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.71583347471659,
+      "std_accuracy": 0.20796007875281133
+    },
+    "cnn": {
+      "accuracies": [
+        0.6777493606138107,
+        0.9382964453386989,
+        0.9,
+        0.8583333333333334,
+        0.83828125,
+        1.0,
+        0.7648351648351648,
+        0.949685534591195,
+        0.8596491228070176
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.8652033568354689,
+      "std_accuracy": 0.09302114488959498
+    },
+    "fcn": {
+      "accuracies": [
+        0.6342710997442456,
+        0.9242119382964452,
+        0.85,
+        0.9083333333333333,
+        0.65703125,
+        1.0,
+        0.6835164835164835,
+        0.8050314465408804,
+        0.556390977443609
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7798651698749998,
+      "std_accuracy": 0.14409149372036403
+    },
+    "patchtst": {
+      "accuracies": [
+        0.43478260869565216,
+        0.8863849765258216,
+        0.7333333333333334,
+        0.8250000000000001,
+        0.5552083333333333,
+        1.0,
+        0.7142857142857143,
+        0.9371069182389937,
+        0.7919799498746867
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7642313149208373,
+      "std_accuracy": 0.17014160413291524
+    },
+    "transformer": {
+      "accuracies": [
+        0.42710997442455245,
+        0.8579476861167002,
+        0.7333333333333334,
+        0.8083333333333335,
+        0.5703125,
+        0.99929676511955,
+        0.6945054945054945,
+        0.89937106918239,
+        0.7493734335839599
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7488426210665905,
+      "std_accuracy": 0.16309758332061505
+    }
+  },
+  "by_dataset": {
+    "Adiac": {
+      "autoformer": 0.32225063938618925,
+      "cats": 0.2608695652173913,
+      "cnn": 0.6777493606138107,
+      "fcn": 0.6342710997442456,
+      "patchtst": 0.43478260869565216,
+      "transformer": 0.42710997442455245
+    },
+    "ArrowHead": {
+      "autoformer": 0.9005365526492287,
+      "cats": 0.8435278336686788,
+      "cnn": 0.9382964453386989,
+      "fcn": 0.9242119382964452,
+      "patchtst": 0.8863849765258216,
+      "transformer": 0.8579476861167002
+    },
+    "Beef": {
+      "autoformer": 0.7166666666666667,
+      "cats": 0.6166666666666667,
+      "cnn": 0.9,
+      "fcn": 0.85,
+      "patchtst": 0.7333333333333334,
+      "transformer": 0.7333333333333334
+    },
+    "Car": {
+      "autoformer": 0.8916666666666667,
+      "cats": 0.75,
+      "cnn": 0.8583333333333334,
+      "fcn": 0.9083333333333333,
+      "patchtst": 0.8250000000000001,
+      "transformer": 0.8083333333333335
+    },
+    "ChlorineConcentration": {
+      "autoformer": 0.5567708333333333,
+      "cats": 0.53828125,
+      "cnn": 0.83828125,
+      "fcn": 0.65703125,
+      "patchtst": 0.5552083333333333,
+      "transformer": 0.5703125
+    },
+    "KeplerLightCurves": {
+      "autoformer": 0.9022556390977443,
+      "cats": 0.7819548872180451,
+      "cnn": 0.8596491228070176,
+      "fcn": 0.556390977443609,
+      "patchtst": 0.7919799498746867,
+      "transformer": 0.7493734335839599
+    },
+    "CinCECGTorso": {
+      "cats": 0.9985920434845958,
+      "cnn": 1.0,
+      "fcn": 1.0,
+      "patchtst": 1.0,
+      "transformer": 0.99929676511955
+    },
+    "FiftyWords": {
+      "cats": 0.7406593406593407,
+      "cnn": 0.7648351648351648,
+      "fcn": 0.6835164835164835,
+      "patchtst": 0.7142857142857143,
+      "transformer": 0.6945054945054945
+    },
+    "HouseTwenty": {
+      "cats": 0.9119496855345912,
+      "cnn": 0.949685534591195,
+      "fcn": 0.8050314465408804,
+      "patchtst": 0.9371069182389937,
+      "transformer": 0.89937106918239
+    }
+  },
+  "failures": [
+    {
+      "model": "autoformer",
+      "dataset": "CinCECGTorso",
+      "error": "CUDA OOM during cross-validation"
+    },
+    {
+      "model": "autoformer",
+      "dataset": "FiftyWords",
+      "error": "CUDA OOM"
+    },
+    {
+      "model": "autoformer",
+      "dataset": "HouseTwenty",
+      "error": "CUDA OOM during cross-validation"
+    }
+  ]
+}
