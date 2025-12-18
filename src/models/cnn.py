@@ -34,6 +34,7 @@ class CNN(BaseModel):
     ):
         super().__init__(num_classes)
 
+        # Default filter progression
         if num_filters is None:
             num_filters = [64, 128, 256]
 
@@ -48,13 +49,14 @@ class CNN(BaseModel):
         current_length = input_length
 
         for out_channels in num_filters:
+            # Conv → BatchNorm → ReLU → MaxPool (halves sequence length)
             conv_layers.append(
                 nn.Conv1d(
                     in_channels=in_channels,
                     out_channels=out_channels,
                     kernel_size=kernel_size,
                     stride=1,
-                    padding=kernel_size // 2,  # Same padding
+                    padding=kernel_size // 2,  # Preserve length
                 )
             )
             conv_layers.append(nn.BatchNorm1d(out_channels))
@@ -69,7 +71,7 @@ class CNN(BaseModel):
         # Calculate flattened dimension after conv layers
         flattened_dim = num_filters[-1] * current_length
 
-        # Build fully connected layers
+        # Classification head
         fc_layers: list[nn.Module] = [
             nn.Linear(flattened_dim, 256),
             nn.BatchNorm1d(256),
@@ -89,17 +91,15 @@ class CNN(BaseModel):
         Returns:
             Logits of shape (batch_size, num_classes)
         """
-        # Ensure input is 3D: (batch_size, channels, sequence_length)
+        # Ensure 3D: (batch, channels, length)
         if x.dim() == 2:
-            x = x.unsqueeze(1)  # Add channel dimension if missing
+            x = x.unsqueeze(1)
 
-        # Convolutional layers
+        # Conv layers
         x = self.conv_layers(x)
 
-        # Flatten
+        # Flatten and classify
         x = x.reshape(x.size(0), -1)
-
-        # Fully connected layers
         x = self.fc_layers(x)
 
         return x

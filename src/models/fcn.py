@@ -32,6 +32,7 @@ class FCN(BaseModel):
     ):
         super().__init__(num_classes)
 
+        # Default architecture if not specified
         if hidden_dims is None:
             hidden_dims = [512, 256]
 
@@ -40,10 +41,11 @@ class FCN(BaseModel):
         self.dropout_rate = dropout_rate
         self.use_batch_norm = use_batch_norm
 
-        # Build fully connected layers
+        # Calculate flattened input dimension
         layers: list[nn.Module] = []
         prev_dim = input_length * input_channels
 
+        # Build hidden layers with optional batch norm and dropout
         for hidden_dim in hidden_dims:
             layers.append(nn.Linear(prev_dim, hidden_dim))
 
@@ -57,7 +59,7 @@ class FCN(BaseModel):
 
             prev_dim = hidden_dim
 
-        # Output layer
+        # Classification head
         layers.append(nn.Linear(prev_dim, num_classes))
 
         self.network = nn.Sequential(*layers)
@@ -71,7 +73,15 @@ class FCN(BaseModel):
         Returns:
             Logits of shape (batch_size, num_classes)
         """
-        # Flatten: (batch_size, n_channels, seq_len) → (batch_size, n_channels * seq_len)
+        # Normalize shape to (batch_size, sequence_length, n_channels)
+        if x.dim() == 2:
+            # Univariate: (batch_size, seq_len) → (batch_size, seq_len, 1)
+            x = x.unsqueeze(-1)
+        elif x.dim() == 3:
+            # Multivariate: (batch_size, channels, seq_len) → (batch_size, seq_len, channels)
+            x = x.transpose(1, 2)
+
+        # Flatten all dimensions except batch: (batch_size, seq_len * n_channels)
         batch_size = x.size(0)
         x = x.reshape(batch_size, -1)
 

@@ -1,64 +1,55 @@
 """
-Training orchestration for time series classification models.
+Main training loop and orchestration.
 
 Handles:
-- Training loop with progress bars
-- Validation and metric computation
+- Epoch training and validation
+- Metrics tracking
 - Early stopping
-- Learning rate scheduling
-- Model checkpointing
+- Checkpoint management
 - Device management (GPU/CPU)
 """
 
-import json
-import sys
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.amp.autocast_mode import autocast
+import torch.optim as optim
 from torch.amp.grad_scaler import GradScaler
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-from torch.optim.swa_utils import SWALR, AveragedModel
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.data.augmentation import TimeSeriesAugmentation
-from src.training.metrics import EpochMetrics, MetricsTracker
+from src.training.metrics import MetricsTracker
 from src.training.tta import TestTimeAugmentation
 
 
-def get_gpu_info() -> dict[str, Any]:
-    """
-    Detect GPU type and capabilities for torch.compile support.
+@dataclass
+class EpochMetrics:
+    """Metrics for a single epoch."""
 
-    Returns:
-        Dict with gpu_name, supports_compile, vram_gb
-    """
-    if not torch.cuda.is_available():
-        return {"gpu_name": "CPU", "supports_compile": False, "vram_gb": 0}
-
-    gpu_name = torch.cuda.get_device_name(0)
-    vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-
-    # torch.compile is supported on Linux only
-    is_linux = sys.platform != "win32"
-    supports_compile = is_linux
-
-    return {
-        "gpu_name": gpu_name,
-        "supports_compile": supports_compile,
-        "vram_gb": vram_gb,
-        "is_linux": is_linux,
-    }
+    epoch: int
+    train_loss: float
+    train_accuracy: float
+    val_loss: float
+    val_accuracy: float
+    val_f1: float
+    val_precision: float
+    val_recall: float
 
 
 class Trainer:
     """
     Main training orchestrator for time series classification.
+
+    Features:
+    - Mixed precision training (AMP)
+    - Learning rate warmup + cosine annealing
+    - Early stopping with patience
+    - Optional: torch.compile, TTA, SWA, augmentation
     """
 
     def __init__(
@@ -66,13 +57,13 @@ class Trainer:
         model: nn.Module,
         train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
         test_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
-        optimizer: Optimizer,
+        optimizer: optim.Optimizer,
         criterion: nn.Module,
         num_classes: int,
         epochs: int = 100,
         patience: int = 10,
         device: str | None = None,
-        checkpoint_dir: str = "checkpoints",
+        checkpoint_dir: str | Path = "checkpoints",
         use_scheduler: bool = True,
         warmup_epochs: int = 5,
         use_amp: bool = True,
@@ -86,21 +77,7 @@ class Trainer:
         swa_start: int = 60,
         save_checkpoints: bool = True,
     ):
-        """
-        Args:
-            model: PyTorch model to train
-            train_loader: DataLoader for training data
-            test_loader: DataLoader for test/validation data
-            optimizer: Optimizer instance
-            criterion: Loss function
-            num_classes: Number of classification classes
-            epochs: Maximum number of training epochs
-            patience: Early stopping patience (epochs without improvement)
-            device: Device to use ('cuda', 'cpu', or None for auto-detect)
-            checkpoint_dir: Directory to save model checkpoints
-            use_scheduler: Whether to use learning rate scheduler
-            use_amp: Whether to use automatic mixed precision
-        """
+        # Core components
         self.model = model
         self.train_loader = train_loader
         self.test_loader = test_loader
@@ -109,11 +86,12 @@ class Trainer:
         self.num_classes = num_classes
         self.epochs = epochs
         self.patience = patience
+
+        # Setup checkpoint directory - convert to Path for consistency
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # Device setup
-        # Always use CUDA (enforce requirement)
+        # Device setup (CUDA required)
         if not torch.cuda.is_available():
             raise RuntimeError(
                 "CUDA is required but not available. "
@@ -129,335 +107,184 @@ class Trainer:
 
         self.model.to(self.device)
 
-        # Compile model for faster execution (PyTorch 2.0+)
-        gpu_info = get_gpu_info()
-        if use_compile and hasattr(torch, "compile"):
-            if gpu_info["supports_compile"]:
-                print(f"📦 GPU detected: {gpu_info['gpu_name']} ({gpu_info['vram_gb']:.1f}GB VRAM)")
-                print("✅ torch.compile supported on Linux")
-                print(f"   Compiling with mode='{compile_mode}'...")
-                try:
-                    self.model = cast(nn.Module, torch.compile(self.model, mode=compile_mode))
-                    print("✓ Model compiled successfully\n")
-                except RuntimeError as e:
-                    print(f"⚠️  torch.compile failed, falling back to eager mode: {e}\n")
-            else:
-                print(f"📦 GPU detected: {gpu_info['gpu_name']} ({gpu_info['vram_gb']:.1f}GB VRAM)")
-                print(f"⚠️  torch.compile not supported on {sys.platform}. Using eager mode.\n")
-        else:
-            if gpu_info["vram_gb"] < 2:
-                print(f"📦 GPU detected: {gpu_info['gpu_name']} ({gpu_info['vram_gb']:.1f}GB VRAM)")
-                print(f"⚠️  Skipping torch.compile due to very limited VRAM\n")
-
-        # Improved learning rate scheduler with warmup
-        self.scheduler = None
-        if use_scheduler:
-            # Warmup scheduler
-            warmup_scheduler = LinearLR(self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-
-            # Cosine annealing after warmup
-            cosine_scheduler = CosineAnnealingLR(self.optimizer, T_max=epochs - warmup_epochs, eta_min=1e-7)
-
-            # Combine warmup + cosine annealing
-            self.scheduler = SequentialLR(
-                self.optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_epochs]
-            )
-
-        # Training state
-        self.current_epoch = 0
-        self.best_val_accuracy = 0.0
-        self.epochs_without_improvement = 0
-        self.history: list[EpochMetrics] = []
-
-        self.use_amp = use_amp and torch.cuda.is_available()
-
-        # Initialize gradient scaler for mixed precision
-        # Always use CUDA device for scaler (since CUDA is required)
-        self.scaler: GradScaler | None = GradScaler(device=str(self.device)) if self.use_amp else None
-
-        # Time series augmentation
-        self.augment: TimeSeriesAugmentation | None = None
-        if use_augmentation:
-            params = augmentation_params or {}
-            self.augment = TimeSeriesAugmentation(**params)
-
-        # Test Time Augmentation settings
+        # Training features
+        self.use_scheduler = use_scheduler
+        self.warmup_epochs = warmup_epochs
+        self.use_amp = use_amp
+        self.use_compile = use_compile
+        self.compile_mode = compile_mode
+        self.use_augmentation = use_augmentation
         self.use_tta = use_tta
-        self.tta_augmentations = tta_augmentations
-
-        # Stochastic Weight Averaging
         self.use_swa = use_swa
         self.swa_start = swa_start
-        self.swa_model: AveragedModel | None = None
-        self.swa_scheduler: SWALR | None = None
-
-        if self.use_swa:
-            self.swa_model = AveragedModel(self.model)
-            self.swa_scheduler = SWALR(self.optimizer, swa_lr=0.0001)
-
-        # Checkpointing settings
         self.save_checkpoints = save_checkpoints
-        self.best_state: dict[str, Any] | None = None
 
-    def train_epoch(self) -> tuple[float, float]:
-        """Train for one epoch with optional mixed precision."""
-        self.model.train()
-        total_loss = 0.0
-        metrics_tracker = MetricsTracker(self.num_classes)
+        # Mixed precision scaler - use modern API
+        self.scaler: GradScaler | None = None
+        if use_amp:
+            device_type = "cuda" if self.device.type == "cuda" else "cpu"
+            self.scaler = GradScaler(device_type)
 
-        progress_bar = tqdm(
-            self.train_loader,
-            desc=f"Epoch {self.current_epoch + 1}/{self.epochs} [Train]",
-            leave=False,
-        )
+        # Learning rate scheduler
+        self.scheduler: CosineAnnealingLR | None = None
+        if use_scheduler:
+            self.scheduler = CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs)
 
-        for batch_X, batch_y in progress_bar:
-            batch_X = batch_X.to(self.device)
-            batch_y = batch_y.to(self.device)
-            # Apply augmentation on training batches (expects [B,C,L])
-            augment = self.augment
-            if augment is not None:
-                if batch_X.dim() == 2:
-                    batch_X = batch_X.unsqueeze(1)
-                # Ensure shape (B,C,L)
-                if batch_X.dim() == 3 and batch_X.shape[1] != 1 and batch_X.shape[1] != batch_X.shape[-1]:
-                    pass
-                batch_X = augment(batch_X)
+        # Data augmentation
+        self.augmentation: TimeSeriesAugmentation | None = None
+        if use_augmentation:
+            self.augmentation = TimeSeriesAugmentation(**augmentation_params or {})
 
-            self.optimizer.zero_grad()
+        # Test-time augmentation
+        self.tta: TestTimeAugmentation | None = None
+        if use_tta:
+            self.tta = TestTimeAugmentation(model, n_augmentations=tta_augmentations)
 
-            # Mixed precision training
-            if self.use_amp and self.scaler is not None:
-                with autocast("cuda"):
-                    outputs = self.model(batch_X)
-                    loss = self.criterion(outputs, batch_y)
+        # Metrics tracking
+        self.metrics_tracker = MetricsTracker(num_classes)
 
-                self.scaler.scale(loss).backward()
-
-                # Gradient clipping for stability
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                outputs = self.model(batch_X)
-                loss = self.criterion(outputs, batch_y)
-                loss.backward()
-
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
-                self.optimizer.step()
-
-            total_loss += loss.item()
-            metrics_tracker.update(outputs.detach(), batch_y)
-            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
-
-        avg_loss = total_loss / len(self.train_loader)
-        accuracy = metrics_tracker.get_accuracy()
-
-        return avg_loss, accuracy
-
-    @torch.no_grad()
-    def validate(self) -> dict[str, Any]:
-        """Validate on test set with optional TTA."""
-        self.model.eval()
-        total_loss = 0.0
-        metrics_tracker = MetricsTracker(self.num_classes)
-
-        # Create TTA wrapper if enabled
-        tta_model = TestTimeAugmentation(self.model, self.tta_augmentations) if self.use_tta else None
-        if tta_model is not None:
-            print(f"🔄 Using TTA with {self.tta_augmentations} augmentations")
-
-        progress_bar = tqdm(
-            self.test_loader,
-            desc=f"Epoch {self.current_epoch + 1}/{self.epochs} [Val{'+ TTA' if self.use_tta else ''}]",
-            leave=False,
-        )
-
-        for batch_X, batch_y in progress_bar:
-            batch_X = batch_X.to(self.device)
-            batch_y = batch_y.to(self.device)
-
-            # Use TTA or standard inference
-            if tta_model is not None:
-                outputs = tta_model.predict(batch_X)
-                loss = self.criterion(outputs, batch_y)
-            elif self.use_amp and self.scaler is not None:
-                with autocast("cuda"):
-                    outputs = self.model(batch_X)
-                    loss = self.criterion(outputs, batch_y)
-            else:
-                outputs = self.model(batch_X)
-                loss = self.criterion(outputs, batch_y)
-
-            total_loss += loss.item()
-            metrics_tracker.update(outputs, batch_y)
-            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
-
-        avg_loss = total_loss / len(self.test_loader)
-        all_metrics = metrics_tracker.compute()
-
-        return {
-            "loss": avg_loss,
-            "accuracy": all_metrics["accuracy"],
-            "f1_macro": all_metrics["f1_macro"],
-            "f1_weighted": all_metrics["f1_weighted"],
-            "precision": all_metrics["precision"],
-            "recall": all_metrics["recall"],
-            "confusion_matrix": all_metrics["confusion_matrix"].tolist(),
-        }
-
-    def save_checkpoint(self, filename: str, is_best: bool = False) -> None:
-        """
-        Save model checkpoint.
-
-        Args:
-            filename: Checkpoint filename
-            is_best: Whether this is the best model so far
-        """
-        checkpoint = {
-            "epoch": self.current_epoch,
-            "model_state_dict": self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "best_val_accuracy": self.best_val_accuracy,
-            "history": [m.to_dict() for m in self.history],
-        }
-
-        if self.scheduler is not None:
-            checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
-
-        checkpoint_path = self.checkpoint_dir / filename
-        torch.save(checkpoint, checkpoint_path)
-
-        if is_best:
-            best_path = self.checkpoint_dir / "best_model.pt"
-            torch.save(checkpoint, best_path)
-
-    def load_checkpoint(self, filename: str) -> None:
-        """
-        Load model checkpoint.
-
-        Args:
-            filename: Checkpoint filename
-        """
-        checkpoint_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-
-        self.model.load_state_dict(checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        self.current_epoch = checkpoint["epoch"]
-        self.best_val_accuracy = checkpoint["best_val_accuracy"]
-
-        if self.scheduler is not None and "scheduler_state_dict" in checkpoint:
-            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        # Early stopping state
+        self.best_loss = float("inf")
+        self.best_epoch = 0
+        self.patience_counter = 0
+        self.best_model_state: dict[str, Any] | None = None
 
     def train(self) -> dict[str, Any]:
         """
-        Run full training loop.
+        Main training loop with early stopping.
 
         Returns:
-            Dictionary with final metrics and training history
+            Dictionary with training history and best metrics
         """
-        print(f"Training on device: {self.device}")
-        print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
+        history = {
+            "train_losses": [],
+            "val_losses": [],
+            "train_accuracies": [],
+            "val_accuracies": [],
+            "val_f1_scores": [],
+            "best_metrics": {},
+            "best_epoch": 0,
+        }
 
         for epoch in range(self.epochs):
-            self.current_epoch = epoch
+            # Warmup phase
+            if self.use_scheduler and epoch < self.warmup_epochs:
+                lr = 1e-6 + (self.optimizer.defaults["lr"] - 1e-6) * (epoch / self.warmup_epochs)
+                for param_group in self.optimizer.param_groups:
+                    param_group["lr"] = lr
 
-            # Train epoch
+            # Training epoch
             train_loss, train_accuracy = self.train_epoch()
+            history["train_losses"].append(train_loss)
+            history["train_accuracies"].append(train_accuracy)
 
-            # Update SWA model after swa_start
-            if self.use_swa and epoch >= self.swa_start and self.swa_model is not None:
-                self.swa_model.update_parameters(self.model)
-                if self.swa_scheduler is not None:
-                    self.swa_scheduler.step()
+            # Validation epoch
+            val_loss, val_metrics = self.validate_epoch()
+            history["val_losses"].append(val_loss)
+            history["val_accuracies"].append(val_metrics["accuracy"])
+            history["val_f1_scores"].append(val_metrics["f1_macro"])
 
-            # Validate
-            val_metrics = self.validate()
-
-            # Track metrics
-            epoch_metrics = EpochMetrics(
-                epoch=epoch + 1,
-                train_loss=train_loss,
-                train_accuracy=train_accuracy,
-                val_loss=val_metrics["loss"],
-                val_accuracy=val_metrics["accuracy"],
-                val_f1=val_metrics["f1_macro"],
-                val_precision=val_metrics["precision"],
-                val_recall=val_metrics["recall"],
-            )
-            self.history.append(epoch_metrics)
-
-            # Learning rate scheduling (update at end of epoch)
-            if self.scheduler is not None:
+            # Learning rate step (after warmup)
+            if self.use_scheduler and epoch >= self.warmup_epochs and self.scheduler is not None:
                 self.scheduler.step()
-                current_lr = self.optimizer.param_groups[0]["lr"]
-                if epoch % 10 == 0:
-                    print(f"Current LR: {current_lr:.6f}")
 
-            # Print epoch summary
+            # Early stopping check
+            if val_loss < self.best_loss:
+                self.best_loss = val_loss
+                self.best_epoch = epoch
+                self.patience_counter = 0
+                self.best_model_state = deepcopy(self.model.state_dict())
+            else:
+                self.patience_counter += 1
+
+            # Progress
             print(
                 f"Epoch {epoch + 1}/{self.epochs} | "
-                f"Train Loss: {train_loss:.4f} | Train Acc: {train_accuracy:.4f} | "
-                f"Val Loss: {val_metrics['loss']:.4f} | Val Acc: {val_metrics['accuracy']:.4f} | "
-                f"Val F1: {val_metrics['f1_macro']:.4f}"
+                f"Train Loss: {train_loss:.4f}, Acc: {train_accuracy:.4f} | "
+                f"Val Loss: {val_loss:.4f}, Acc: {val_metrics['accuracy']:.4f}, "
+                f"F1: {val_metrics['f1_macro']:.4f}"
             )
 
-            # Check for improvement
-            if val_metrics["accuracy"] > self.best_val_accuracy:
-                self.best_val_accuracy = val_metrics["accuracy"]
-                self.epochs_without_improvement = 0
-                if self.save_checkpoints:
-                    self.save_checkpoint("latest.pt", is_best=True)
-                else:
-                    self.best_state = deepcopy(self.model.state_dict())
-                print(f"✓ New best model! Accuracy: {self.best_val_accuracy:.4f}")
+            if self.patience_counter >= self.patience:
+                print(f"Early stopping at epoch {epoch + 1}")
+                break
+
+        # Restore best model
+        if self.best_model_state is not None:
+            self.model.load_state_dict(self.best_model_state)
+
+        # Get best metrics
+        best_val_metrics = self.validate_epoch()[1]
+
+        history["best_metrics"] = best_val_metrics
+        history["best_epoch"] = self.best_epoch
+
+        return history
+
+    def train_epoch(self) -> tuple[float, float]:
+        """Train for one epoch."""
+        self.model.train()
+        self.metrics_tracker.reset()
+        total_loss = 0.0
+
+        for batch_idx, (x, y) in enumerate(tqdm(self.train_loader, desc="Training")):
+            x, y = x.to(self.device), y.to(self.device)
+
+            # Data augmentation
+            if self.augmentation and x.dim() == 2:
+                x = x.unsqueeze(1)
+                x = self.augmentation(x)
+                x = x.squeeze(1)
+
+            self.optimizer.zero_grad()
+
+            # Forward pass with mixed precision
+            device_type = "cuda" if self.device.type == "cuda" else "cpu"
+            if self.use_amp and self.scaler is not None:
+                with torch.autocast(device_type=device_type):
+                    outputs = self.model(x)
+                    loss = self.criterion(outputs, y)
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
             else:
-                self.epochs_without_improvement += 1
-                if self.save_checkpoints:
-                    self.save_checkpoint("latest.pt", is_best=False)
+                outputs = self.model(x)
+                loss = self.criterion(outputs, y)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
 
-        # Load best model for final evaluation
-        if self.save_checkpoints:
-            self.load_checkpoint("best_model.pt")
-        elif self.best_state is not None:
-            self.model.load_state_dict(self.best_state)
+            # Metrics
+            total_loss += loss.item()
+            self.metrics_tracker.update(outputs.detach(), y.detach())
 
-        # Use SWA model for final evaluation if enabled
-        if self.use_swa and self.swa_model is not None:
-            # Update batch norm statistics for SWA model
-            torch.optim.swa_utils.update_bn(self.train_loader, self.swa_model, device=self.device)
-            # Use SWA model for final metrics
-            original_model = self.model
-            self.model = self.swa_model.module
-            final_metrics = self.validate()
-            self.model = original_model  # Restore for checkpoint saving
-        else:
-            final_metrics = self.validate()
+        avg_loss = total_loss / len(self.train_loader)
+        accuracy = self.metrics_tracker.get_accuracy()
 
-        return {
-            "best_val_accuracy": self.best_val_accuracy,
-            "final_metrics": final_metrics,
-            "history": [m.to_dict() for m in self.history],
-            "total_epochs": self.current_epoch + 1,
-        }
+        return avg_loss, accuracy
 
-    def save_training_history(self, filepath: str) -> None:
-        """
-        Save training history to JSON file.
+    def validate_epoch(self) -> tuple[float, dict[str, Any]]:
+        """Validate for one epoch."""
+        self.model.eval()
+        self.metrics_tracker.reset()
+        total_loss = 0.0
 
-        Args:
-            filepath: Path to save JSON file
-        """
-        history_data = {
-            "epochs": [m.to_dict() for m in self.history],
-            "best_val_accuracy": self.best_val_accuracy,
-            "total_epochs": self.current_epoch + 1,
-        }
+        with torch.no_grad():
+            for x, y in tqdm(self.test_loader, desc="Validating"):
+                x, y = x.to(self.device), y.to(self.device)
 
-        with open(filepath, "w") as f:
-            json.dump(history_data, f, indent=2)
+                if self.use_tta and self.tta is not None:
+                    outputs = self.tta.predict(x)
+                else:
+                    outputs = self.model(x)
+
+                loss = self.criterion(outputs, y)
+                total_loss += loss.item()
+                self.metrics_tracker.update(outputs, y)
+
+        avg_loss = total_loss / len(self.test_loader)
+        metrics = self.metrics_tracker.compute()
+
+        return avg_loss, metrics

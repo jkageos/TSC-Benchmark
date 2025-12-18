@@ -26,6 +26,7 @@ Thumbs.db
 *.pt
 *.pth
 *.ckpt
+checkpoints/
 
 # Experiment results and logs
 results/

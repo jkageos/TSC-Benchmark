@@ -1,8 +1,10 @@
 """
-PatchTST: A Time Series is Worth 16x16 Patches.
+PatchTST classifier.
 
-Reference: https://github.com/yuqinie98/PatchTST
-Implements patch-based tokenization for time series.
+Highlights:
+- Tokenizes time series into overlapping patches
+- Transformer over patch tokens (Flash Attention when available)
+- Class token summarizes the sequence for classification
 """
 
 import math
@@ -16,7 +18,7 @@ from src.models.base import BaseModel
 class PatchEmbedding(nn.Module):
     """Patch embedding module for time series."""
 
-    def __init__(self, d_model: int, patch_len: int, stride: int):
+    def __init__(self, patch_len: int, stride: int, d_model: int):
         super().__init__()
         self.patch_len = patch_len
         self.stride = stride
@@ -30,16 +32,15 @@ class PatchEmbedding(nn.Module):
         Returns:
             Patch embeddings (batch_size, num_patches, d_model)
         """
+        # Compute sliding window patches; pad last patch if incomplete
         batch_size, seq_len, channels = x.shape
 
-        # Calculate number of patches
         num_patches = max(1, (seq_len - self.patch_len) // self.stride + 1)
 
-        # Create patches (take first channel for univariate)
         patches = []
         for i in range(num_patches):
             start = i * self.stride
-            end = min(start + self.patch_len, seq_len)  # Prevent overflow
+            end = min(start + self.patch_len, seq_len)
 
             # Pad if last patch is shorter
             if end - start < self.patch_len:
@@ -51,7 +52,9 @@ class PatchEmbedding(nn.Module):
 
             patches.append(patch)
 
-        patches = torch.stack(patches, dim=1)  # (batch_size, num_patches, patch_len)
+        patches = torch.stack(patches, dim=1)
+
+        # Project each patch (length patch_len) to d_model
         patch_embeddings = self.projection(patches)
 
         return patch_embeddings
@@ -67,7 +70,9 @@ class MultiHeadAttention(nn.Module):
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
-        self.use_flash = False  # Disable globally for reproducibility
+
+        # Enable SDPA on CUDA; falls back to standard attention otherwise
+        self.use_flash = False  # Disabled for reproducibility
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
@@ -81,7 +86,7 @@ class MultiHeadAttention(nn.Module):
         K = self.key(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = self.value(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        # Use Flash Attention if available (2-4x faster)
+        # Try Flash Attention; on failure (e.g., shape/driver constraints) fall back gracefully
         if self.use_flash:
             try:
                 context = torch.nn.functional.scaled_dot_product_attention(
@@ -89,8 +94,7 @@ class MultiHeadAttention(nn.Module):
                 )
             except RuntimeError as e:
                 print(f"⚠️  Flash Attention failed, falling back to standard attention: {e}")
-                self.use_flash = False  # Disable for future calls
-                # Compute standard attention as fallback
+                self.use_flash = False
                 scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
                 if mask is not None:
                     scores = scores.masked_fill(mask == 0, float("-inf"))
@@ -156,16 +160,20 @@ class PatchTST(BaseModel):
     ):
         super().__init__(num_classes)
 
-        self.patch_embedding = PatchEmbedding(d_model, patch_len, stride)
+        # Calculate number of patches
+        num_patches = max(1, (input_length - patch_len) // stride + 1)
+
+        self.patch_embedding = PatchEmbedding(patch_len, stride, d_model)
+
+        # Class token aggregates sequence info for classification
+        self.class_token = nn.Parameter(torch.randn(1, 1, d_model))
+
+        # Positional encoding for [CLS] + patch tokens
+        self.positional_encoding = nn.Parameter(torch.randn(1, num_patches + 1, d_model))
 
         self.transformer_blocks = nn.ModuleList(
             [TransformerBlock(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)]
         )
-
-        # Calculate number of patches
-        num_patches = max(1, (input_length - patch_len) // stride + 1)
-        self.class_token = nn.Parameter(torch.randn(1, 1, d_model))
-        self.positional_encoding = nn.Parameter(torch.randn(1, num_patches + 1, d_model))
 
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(d_model, num_classes)
@@ -173,36 +181,26 @@ class PatchTST(BaseModel):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: Input tensor of shape (batch_size, sequence_length) for univariate
-               or (batch_size, n_channels, sequence_length) for multivariate
-
-        Returns:
-            Logits of shape (batch_size, num_classes)
+            x: (B, T) or (B, C, T), normalized to (B, T, C)
         """
-        # Handle input shapes - convert to (batch_size, seq_len, channels)
+        # Patching → prepend class token → add positional encoding
         if x.dim() == 2:
-            # Univariate: (batch_size, seq_len) → (batch_size, seq_len, 1)
             x = x.unsqueeze(-1)
         elif x.dim() == 3:
-            # Multivariate: (batch_size, channels, seq_len) → (batch_size, seq_len, channels)
             x = x.transpose(1, 2)
 
-        # Create patch embeddings
         x = self.patch_embedding(x)
 
-        # Add class token
         batch_size = x.shape[0]
         class_tokens = self.class_token.expand(batch_size, -1, -1)
         x = torch.cat([class_tokens, x], dim=1)
 
-        # Add positional encoding
         x = x + self.positional_encoding[:, : x.size(1), :]
 
-        # Apply transformer blocks
         for block in self.transformer_blocks:
             x = block(x)
 
-        # Use class token for classification
+        # Use class token as sequence summary for logits
         x = x[:, 0, :]
         x = self.dropout(x)
         x = self.classifier(x)

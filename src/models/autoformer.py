@@ -1,8 +1,10 @@
 """
-Autoformer: Decomposition Transformers with Auto-Correlation for Time Series Forecasting.
+Autoformer encoder for time series classification.
 
-Reference: https://github.com/thuml/Autoformer
-Implements auto-correlation attention and time series decomposition.
+Key ideas:
+- Auto-correlation attention via FFT for efficient long-range dependencies
+- Top-k lags selection to focus attention
+- Temporal pooling before classification
 """
 
 import math
@@ -26,37 +28,36 @@ class AutoCorrelation(nn.Module):
     def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         """
         Auto-correlation attention forward pass.
+
+        Implementation:
+        - FFT-based correlation (O(T log T)) instead of O(T^2) attention
+        - Select top-k lags for sparse aggregation
         """
         batch_size, n_heads, seq_len, d_k = queries.shape
 
-        # Upcast to float32 for FFT stability
+        # Upcast to float32 for FFT stability (mixed precision safe)
         q32 = queries.float()
         k32 = keys.float()
 
-        # Compute auto-correlation via FFT
+        # Frequency-domain multiply → inverse FFT gives correlation over lags
         queries_fft = torch.fft.rfft(q32, dim=-2)
         keys_fft = torch.fft.rfft(k32, dim=-2)
 
-        # Element-wise multiplication in frequency domain
         corr = queries_fft * torch.conj(keys_fft)
         corr = torch.fft.irfft(corr, n=seq_len, dim=-2)
 
-        # Get top-k lags
+        # Top-k lag selection reduces noise and improves efficiency
         topk = max(1, int(seq_len * self.factor))
         weights, indices = torch.topk(corr, topk, dim=-2, largest=True, sorted=True)
 
-        # Normalize weights
         weights = torch.softmax(weights, dim=-2)
 
-        # Gather values by top-k indices
         values_expanded = values.unsqueeze(2).expand(-1, -1, topk, -1, -1)
         gather_idx = indices.unsqueeze(-1).expand(-1, -1, -1, -1, d_k)
         values_selected = torch.gather(values_expanded, 2, gather_idx)
 
-        # Weighted sum
         output = torch.sum(weights.unsqueeze(-1) * values_selected, dim=-2)
 
-        # Cast back to original dtype
         return output.to(queries.dtype)
 
 
@@ -113,11 +114,14 @@ class Autoformer(BaseModel):
     ):
         super().__init__(num_classes)
 
+        # Channels → model dim; inputs become (B, T, C)
         self.input_projection = nn.Linear(input_channels, d_model)
+
+        # Register fixed PE as buffer (excluded from optimizer/state_dict params)
         pe = self._get_positional_encoding(d_model, max_seq_len)
         self.register_buffer("pe", pe)
 
-        # Explicitly type as ModuleList of ModuleDict to satisfy type checkers
+        # Encoder stack: autocorrelation + FFN with residual + norm
         self.encoder_layers: nn.ModuleList = nn.ModuleList(
             [
                 nn.ModuleDict(
@@ -134,6 +138,7 @@ class Autoformer(BaseModel):
             ]
         )
 
+        # Temporal pooling before final classifier
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(d_model, num_classes)
@@ -149,6 +154,11 @@ class Autoformer(BaseModel):
         return pe.unsqueeze(0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (B, T) or (B, C, T), normalized to (B, T, C)
+        """
+        # Shape normalization → projection → add PE
         if x.dim() == 2:
             x = x.unsqueeze(-1)
         elif x.dim() == 3:
@@ -159,6 +169,7 @@ class Autoformer(BaseModel):
         pe: torch.Tensor = self.pe  # type: ignore
         x = x + pe[:, : x.size(1), :]
 
+        # Encoder stack: autocorrelation + FFN with residual + norm
         for layer in self.encoder_layers:
             layer_dict = cast(nn.ModuleDict, layer)
             attn_out = cast(AutoCorrelationMultiHead, layer_dict["attention"])(x)
@@ -167,6 +178,7 @@ class Autoformer(BaseModel):
             ff_out = cast(nn.Sequential, layer_dict["feed_forward"])(x)
             x = cast(nn.LayerNorm, layer_dict["norm2"])(x + cast(nn.Dropout, layer_dict["dropout2"])(ff_out))
 
+        # Pool over time, then classify
         x = x.transpose(1, 2)
         x = self.pool(x)
         x = x.squeeze(-1)

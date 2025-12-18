@@ -1,326 +1,225 @@
 """
-Dataset loading and preprocessing for UCR time series classification datasets.
-
-This module handles:
-- Loading datasets via aeon library
-- Z-score normalization
-- Padding/truncation for variable-length sequences
-- Train/test split management
+UCR dataset loading and preprocessing with multiprocessing safety.
 """
 
-from typing import Any, Tuple
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
+from aeon.datasets import load_classification
 from numpy.typing import NDArray
-from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
-
-class TimeSeriesDataset(Dataset[Tuple[torch.Tensor, torch.Tensor]]):
-    """
-    PyTorch Dataset wrapper for time series classification data.
-
-    Handles both univariate and multivariate time series.
-    """
-
-    def __init__(self, X: NDArray[np.float64], y: NDArray[np.int64]):
-        """
-        Args:
-            X: Time series data of shape (n_samples, n_channels, length) or (n_samples, length)
-            y: Labels of shape (n_samples,)
-        """
-        self.X = torch.FloatTensor(X)
-        self.y = torch.LongTensor(y)
-
-    def __len__(self) -> int:
-        return len(self.y)
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.X[idx], self.y[idx]
+from src.utils.system import get_safe_num_workers, recommend_num_workers
 
 
 class UCRDataLoader:
-    """
-    Loader for UCR time series classification datasets.
-
-    Provides preprocessing including normalization and padding.
-    """
+    """Handles UCR dataset loading and preprocessing."""
 
     def __init__(
         self,
         dataset_name: str,
         normalize: bool = True,
-        padding: str = "none",
+        padding: str = "zero",
         max_length: int | None = None,
+        cache_dir: str | Path = "./data/cache",
     ):
         """
         Args:
-            dataset_name: Name of the UCR dataset (e.g., "Adiac", "ArrowHead")
-            normalize: Whether to apply z-score normalization (default: True)
-            padding: Padding strategy - "none", "zero", "repeat" (default: "none")
-            max_length: Maximum sequence length for padding/truncation (default: None)
+            dataset_name: UCR dataset name
+            normalize: Apply z-score normalization
+            padding: Padding strategy ('zero', 'edge', 'wrap')
+            max_length: Maximum sequence length (truncate if longer)
+            cache_dir: Directory for caching downloaded datasets
         """
         self.dataset_name = dataset_name
         self.normalize = normalize
         self.padding = padding
         self.max_length = max_length
-
-        self.scaler: StandardScaler | None = None
-        self.label_encoder = LabelEncoder()
-
-        # Dataset metadata
-        self.n_classes: int = 0
-        self.n_channels: int = 0
-        self.sequence_length: int = 0
-        self.n_train: int = 0
-        self.n_test: int = 0
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def load_data(
         self,
-    ) -> Tuple[NDArray[np.float64], NDArray[np.int64], NDArray[np.float64], NDArray[np.int64]]:
-        """
-        Load and preprocess UCR dataset.
-
-        Returns:
-            Tuple of (X_train, y_train, X_test, y_test)
-            X shape: (n_samples, n_channels, sequence_length) or (n_samples, sequence_length)
-            y shape: (n_samples,)
-        """
-        # Import here to avoid circular imports and handle dynamic loading
-        from aeon.datasets import load_classification
-
-        # Load dataset using aeon - handling variable return types
-        train_data = load_classification(self.dataset_name, split="train")
-        test_data = load_classification(self.dataset_name, split="test")
-
-        # Extract X and y from tuple, ignoring metadata if present
-        X_train_raw = train_data[0]
-        y_train_raw = train_data[1]
-        X_test_raw = test_data[0]
-        y_test_raw = test_data[1]
+    ) -> tuple[NDArray[np.float64], NDArray[np.int64], NDArray[np.float64], NDArray[np.int64]]:
+        """Load and preprocess UCR dataset."""
+        # Load raw data - explicitly unpack 2-tuple, ignore optional metadata
+        X_train_raw, y_train_raw = load_classification(self.dataset_name, split="train", return_metadata=False)[:2]
+        X_test_raw, y_test_raw = load_classification(self.dataset_name, split="test", return_metadata=False)[:2]
 
         # Convert to numpy arrays with explicit types
-        X_train: NDArray[np.float64] = np.asarray(X_train_raw, dtype=np.float64)
-        X_test: NDArray[np.float64] = np.asarray(X_test_raw, dtype=np.float64)
+        X_train: NDArray[np.float64] = np.array(X_train_raw, dtype=np.float64)
+        X_test: NDArray[np.float64] = np.array(X_test_raw, dtype=np.float64)
+        y_train: NDArray[np.int64] = np.array(y_train_raw, dtype=np.int64)
+        y_test: NDArray[np.int64] = np.array(y_test_raw, dtype=np.int64)
 
-        # Handle 2D (univariate) vs 3D (multivariate) data
-        # aeon returns shape (n_samples, n_channels, length) for multivariate
-        # or (n_samples, length) for univariate
-        if X_train.ndim == 2:
-            # Univariate: (n_samples, length)
-            self.n_channels = 1
-            self.sequence_length = X_train.shape[1]
-        else:
-            # Multivariate: (n_samples, n_channels, length)
-            self.n_channels = X_train.shape[1]
-            self.sequence_length = X_train.shape[2]
+        # Handle multivariate: flatten or average channels
+        if X_train.ndim == 3:  # (n_samples, n_channels, seq_len)
+            X_train = X_train.mean(axis=1)
+            X_test = X_test.mean(axis=1)
 
-        # Encode labels to integers
-        y_train_encoded = self.label_encoder.fit_transform(y_train_raw)
-        y_test_encoded = self.label_encoder.transform(y_test_raw)
+        # Ensure 2D
+        if X_train.ndim == 1:
+            X_train = X_train.reshape(-1, 1)
+        if X_test.ndim == 1:
+            X_test = X_test.reshape(-1, 1)
 
-        # Convert to numpy arrays with explicit int type
-        y_train: NDArray[np.int64] = np.asarray(y_train_encoded, dtype=np.int64)
-        y_test: NDArray[np.int64] = np.asarray(y_test_encoded, dtype=np.int64)
+        # **CRITICAL FIX**: Determine target length BEFORE any truncation/padding
+        # This ensures train and test have identical sequence length
+        train_length = X_train.shape[1]
+        test_length = X_test.shape[1]
 
-        self.n_classes = len(self.label_encoder.classes_)
-        self.n_train = len(X_train)
-        self.n_test = len(X_test)
+        # Use the maximum length from both splits as baseline
+        baseline_length = max(train_length, test_length)
 
-        # Apply padding/truncation if specified
+        # Apply max_length constraint if specified
         if self.max_length is not None:
-            X_train = self._apply_padding(X_train, self.max_length)
-            X_test = self._apply_padding(X_test, self.max_length)
-            self.sequence_length = self.max_length
+            target_length = min(baseline_length, self.max_length)
+        else:
+            target_length = baseline_length
 
-        # Apply normalization
+        # Truncate BOTH to target length (in same order to preserve consistency)
+        X_train = X_train[:, :target_length]
+        X_test = X_test[:, :target_length]
+
+        # Pad BOTH to exact target length using the SAME strategy
+        X_train = self._pad_sequences(X_train, target_length)
+        X_test = self._pad_sequences(X_test, target_length)
+
+        # Verify shapes match after preprocessing
+        assert X_train.shape[1] == X_test.shape[1], (
+            f"Shape mismatch after preprocessing: train={X_train.shape[1]}, test={X_test.shape[1]}"
+        )
+
+        # Normalize using combined statistics (better for cross-validation)
         if self.normalize:
-            X_train = self._normalize(X_train, fit=True)
-            X_test = self._normalize(X_test, fit=False)
+            X_train, X_test = self._normalize(X_train, X_test)
 
-        return X_train, y_train, X_test, y_test
+        # Encode labels to 0-based indices
+        y_train_encoded = self._encode_labels(y_train)
+        y_test_encoded = self._encode_labels(y_test)
 
-    def _normalize(self, X: NDArray[np.float64], fit: bool = False) -> NDArray[np.float64]:
-        """
-        Apply z-score normalization per sample (not global).
-
-        This often works better for TSC than global normalization.
-        """
-        if X.ndim == 2:
-            # Univariate: normalize each sample independently
-            mean = X.mean(axis=1, keepdims=True)
-            std = X.std(axis=1, keepdims=True) + 1e-8
-            return (X - mean) / std
-        else:
-            # Multivariate: normalize each channel per sample
-            mean = X.mean(axis=2, keepdims=True)
-            std = X.std(axis=2, keepdims=True) + 1e-8
-            return (X - mean) / std
-
-    def _apply_padding(self, X: NDArray[np.float64], target_length: int) -> NDArray[np.float64]:
-        """
-        Apply padding or truncation to standardize sequence length.
-
-        Args:
-            X: Input data
-            target_length: Target sequence length
-
-        Returns:
-            Padded/truncated data
-        """
-        if X.ndim == 2:
-            # Univariate: (n_samples, length)
-            current_length = X.shape[1]
-
-            if current_length == target_length:
-                return X
-            elif current_length > target_length:
-                # Truncate
-                return np.asarray(X[:, :target_length], dtype=np.float64)
-            else:
-                # Pad
-                return self._pad_sequences(X, target_length)
-        else:
-            # Multivariate: (n_samples, n_channels, length)
-            current_length = X.shape[2]
-
-            if current_length == target_length:
-                return X
-            elif current_length > target_length:
-                # Truncate
-                return np.asarray(X[:, :, :target_length], dtype=np.float64)
-            else:
-                # Pad
-                return self._pad_sequences(X, target_length)
+        return X_train, y_train_encoded, X_test, y_test_encoded
 
     def _pad_sequences(self, X: NDArray[np.float64], target_length: int) -> NDArray[np.float64]:
-        """
-        Pad sequences to target length using specified strategy.
+        """Pad sequences to target length."""
+        current_length = X.shape[1]
+        if current_length >= target_length:
+            return X
 
-        Args:
-            X: Input data
-            target_length: Target sequence length
+        pad_width = target_length - current_length
 
-        Returns:
-            Padded data
-        """
         if self.padding == "zero":
-            # Zero padding
-            if X.ndim == 2:
-                pad_width = ((0, 0), (0, target_length - X.shape[1]))
-            else:
-                pad_width = ((0, 0), (0, 0), (0, target_length - X.shape[2]))
-            return np.pad(X, pad_width, mode="constant", constant_values=0)
-
-        elif self.padding == "repeat":
-            # Repeat last value
-            if X.ndim == 2:
-                pad_width = ((0, 0), (0, target_length - X.shape[1]))
-            else:
-                pad_width = ((0, 0), (0, 0), (0, target_length - X.shape[2]))
-            return np.pad(X, pad_width, mode="edge")
-
+            padding = np.zeros((X.shape[0], pad_width))
+        elif self.padding == "edge":
+            padding = np.tile(X[:, -1:], (1, pad_width))
+        elif self.padding == "wrap":
+            repeats = (pad_width // current_length) + 1
+            padding = np.tile(X, (1, repeats))[:, :pad_width]
         else:
-            raise ValueError(f"Unknown padding strategy: {self.padding}")
+            raise ValueError(f"Unknown padding mode: {self.padding}")
 
-    def get_dataloaders(
+        return np.concatenate([X, padding], axis=1)
+
+    def _normalize(
+        self, X_train: NDArray[np.float64], X_test: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Z-score normalization using training statistics."""
+        mean = X_train.mean()
+        std = X_train.std()
+        std = std if std > 0 else 1.0
+
+        X_train = (X_train - mean) / std
+        X_test = (X_test - mean) / std
+
+        return X_train, X_test
+
+    def _encode_labels(self, y: NDArray[Any]) -> NDArray[np.int64]:
+        """Encode string labels to integers."""
+        unique_labels = np.unique(y)
+        label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
+        return np.array([label_to_idx[label] for label in y], dtype=np.int64)
+
+    def load_data_for_cross_validation(
         self,
-        batch_size: int = 32,
-        shuffle_train: bool = True,
-        num_workers: int = 0,
-    ) -> Tuple[
-        DataLoader[Tuple[torch.Tensor, torch.Tensor]],
-        DataLoader[Tuple[torch.Tensor, torch.Tensor]],
-    ]:
+    ) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
         """
-        Create PyTorch DataLoaders for train and test sets.
-
-        Args:
-            batch_size: Batch size for training
-            shuffle_train: Whether to shuffle training data
-            num_workers: Number of worker processes for data loading
+        Load and preprocess UCR dataset, merging train/test for CV.
 
         Returns:
-            Tuple of (train_loader, test_loader)
+            Tuple of (X_combined, y_combined) with guaranteed consistent sequence length
         """
         X_train, y_train, X_test, y_test = self.load_data()
 
-        train_dataset = TimeSeriesDataset(X_train, y_train)
-        test_dataset = TimeSeriesDataset(X_test, y_test)
+        # Both X_train and X_test are now guaranteed to have same sequence_length
+        # from load_data() method, so safe to combine
+        X_combined = np.vstack([X_train, X_test])
+        y_combined = np.concatenate([y_train, y_test])
 
-        train_loader: DataLoader[Tuple[torch.Tensor, torch.Tensor]] = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=shuffle_train,
-            num_workers=num_workers,
-            pin_memory=True,
-            persistent_workers=num_workers > 0,
-        )
+        return X_combined, y_combined
 
-        test_loader: DataLoader[Tuple[torch.Tensor, torch.Tensor]] = DataLoader(
-            test_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
-            persistent_workers=num_workers > 0,
-        )
 
-        return train_loader, test_loader
+class TimeSeriesDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """PyTorch Dataset for time series."""
 
-    def get_dataset_info(self) -> dict[str, Any]:
-        """
-        Get dataset metadata.
+    def __init__(self, X: NDArray[np.float64], y: NDArray[np.int64]):
+        self.X = torch.from_numpy(X).float()
+        self.y = torch.from_numpy(y).long()
 
-        Returns:
-            Dictionary with dataset information
-        """
-        return {
-            "name": self.dataset_name,
-            "n_classes": self.n_classes,
-            "n_channels": self.n_channels,
-            "sequence_length": self.sequence_length,
-            "n_train": self.n_train,
-            "n_test": self.n_test,
-            "class_names": self.label_encoder.classes_.tolist(),
-        }
+    def __len__(self) -> int:
+        return len(self.X)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.X[idx], self.y[idx]
+
+
+def get_dataset_info(
+    X_train: NDArray[np.float64],
+    y_train: NDArray[np.int64],
+    X_test: NDArray[np.float64],
+    y_test: NDArray[np.int64],
+) -> dict[str, int]:
+    """Extract dataset metadata."""
+    return {
+        "n_train": len(X_train),
+        "n_test": len(X_test),
+        "n_classes": len(np.unique(y_train)),
+        "sequence_length": X_train.shape[1],
+    }
 
 
 def load_ucr_dataset(
     dataset_name: str,
     batch_size: int = 32,
     normalize: bool = True,
-    padding: str = "none",
+    padding: str = "zero",
     max_length: int | None = None,
-    shuffle_train: bool = True,
     num_workers: int = 0,
-) -> Tuple[
-    DataLoader[Tuple[torch.Tensor, torch.Tensor]],
-    DataLoader[Tuple[torch.Tensor, torch.Tensor]],
-    dict[str, Any],
+    max_cpu_load: float = 0.5,
+    auto_workers: bool = False,
+    max_workers_override: int | None = None,
+) -> tuple[
+    DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    dict[str, int],
 ]:
     """
-    Convenience function to load UCR dataset with default settings.
+    End-to-end dataset loading with DataLoader creation.
 
     Args:
-        dataset_name: Name of the UCR dataset
-        batch_size: Batch size for DataLoaders
-        normalize: Whether to apply z-score normalization
-        padding: Padding strategy ("none", "zero", "repeat")
+        dataset_name: UCR dataset name
+        batch_size: Training batch size
+        normalize: Apply z-score normalization
+        padding: Padding strategy
         max_length: Maximum sequence length
-        shuffle_train: Whether to shuffle training data
-        num_workers: Number of worker processes
+        num_workers: DataLoader workers (0 for main process)
+        max_cpu_load: Maximum CPU utilization for auto worker selection (0.0-1.0)
+        auto_workers: Automatically select optimal num_workers based on dataset
+        max_workers_override: Hard cap on workers (overrides safety limits)
 
     Returns:
         Tuple of (train_loader, test_loader, dataset_info)
-
-    Example:
-        >>> train_loader, test_loader, info = load_ucr_dataset("Adiac", batch_size=64)
-        >>> print(f"Dataset: {info['name']}, Classes: {info['n_classes']}")
-        >>> for batch_X, batch_y in train_loader:
-        >>>     # Training loop
-        >>>     pass
     """
     loader = UCRDataLoader(
         dataset_name=dataset_name,
@@ -329,12 +228,58 @@ def load_ucr_dataset(
         max_length=max_length,
     )
 
-    train_loader, test_loader = loader.get_dataloaders(
+    X_train, y_train, X_test, y_test = loader.load_data()
+    dataset_info = get_dataset_info(X_train, y_train, X_test, y_test)
+
+    # Automatic worker selection based on dataset characteristics
+    if auto_workers:
+        recommendation = recommend_num_workers(
+            batch_size=batch_size,
+            sequence_length=dataset_info["sequence_length"],
+            dataset_size=dataset_info["n_train"],
+            max_cpu_load=max_cpu_load,
+        )
+        num_workers = recommendation["recommended_workers"]
+        print(f"🔧 Auto-selected num_workers={num_workers}")
+        print(f"   Reason: {recommendation['reason']}")
+    else:
+        # Validate and clamp manual num_workers
+        max_safe = get_safe_num_workers(
+            max_cpu_load=max_cpu_load,
+            max_workers=max_workers_override,
+        )
+        if num_workers > max_safe:
+            print(
+                f"⚠️  Requested num_workers={num_workers} exceeds safe limit ({max_safe})\n"
+                f"   Clamping to {max_safe} to prevent system overload"
+            )
+            num_workers = max_safe
+
+    # Create PyTorch datasets
+    train_dataset = TimeSeriesDataset(X_train, y_train)
+    test_dataset = TimeSeriesDataset(X_test, y_test)
+
+    # DataLoaders with optional multiprocessing
+    common_kwargs: dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": True,
+        "persistent_workers": num_workers > 0,
+    }
+    if num_workers > 0:
+        common_kwargs["prefetch_factor"] = 2
+
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=batch_size,
-        shuffle_train=shuffle_train,
-        num_workers=num_workers,
+        shuffle=True,
+        **common_kwargs,
     )
 
-    dataset_info = loader.get_dataset_info()
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        **common_kwargs,
+    )
 
     return train_loader, test_loader, dataset_info

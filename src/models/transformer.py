@@ -49,12 +49,12 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, d_model: int, num_heads: int = 8, use_flash: bool = True):
         super().__init__()
-        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
-
+        assert d_model % num_heads == 0
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
-        self.use_flash = False  # Disable globally for reproducibility
+        # Enable Flash Attention (scaled_dot_product_attention) on CUDA for speed/memory
+        self.use_flash = use_flash and torch.cuda.is_available()
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
@@ -73,7 +73,7 @@ class MultiHeadAttention(nn.Module):
             query: (batch_size, seq_len, d_model)
             key: (batch_size, seq_len, d_model)
             value: (batch_size, seq_len, d_model)
-            mask: Optional attention mask
+            mask: Optional attention mask broadcastable to (batch, heads, seq_len, seq_len)
 
         Returns:
             Attention output of shape (batch_size, seq_len, d_model)
@@ -173,7 +173,7 @@ class Transformer(BaseModel):
         max_seq_len: Maximum sequence length for positional encoding (default: 5000)
     """
 
-    def __init__(
+    def __init__(  # noqa: D401
         self,
         num_classes: int,
         input_length: int,
@@ -187,23 +187,15 @@ class Transformer(BaseModel):
         **kwargs,
     ):
         super().__init__(num_classes)
-
-        self.input_length = input_length
-        self.input_channels = input_channels
-        self.d_model = d_model
-
-        # Input projection: (batch_size, seq_len, channels) → (batch_size, seq_len, d_model)
+        # Project channels → model dim; inputs are later (B, T, C)
         self.input_projection = nn.Linear(input_channels, d_model)
-
-        # Positional encoding
+        # Sinusoidal PE (no gradients); buffers avoid saving as params
         self.positional_encoding = PositionalEncoding(d_model, max_seq_len)
-
         # Transformer encoder layers
         self.transformer_layers = nn.ModuleList(
             [TransformerEncoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)]
         )
-
-        # Global average pooling + classification head
+        # Temporal pooling collapses over time before classification
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(d_model, num_classes)
@@ -211,14 +203,11 @@ class Transformer(BaseModel):
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
-            x: Input tensor of shape (batch_size, sequence_length) for univariate
-               or (batch_size, n_channels, sequence_length) for multivariate
-            mask: Optional attention mask
-
-        Returns:
-            Logits of shape (batch_size, num_classes)
+            x: (B, T) for univariate or (B, C, T) for multivariate
+            mask: Optional attention mask for variable-length handling
         """
-        # Handle input shapes
+        # Normalize shapes to (B, T, C)
+        # Univariate: add channel dim; Multivariate: transpose to time-major
         if x.dim() == 2:
             # Univariate: (batch_size, seq_len) → (batch_size, seq_len, 1)
             x = x.unsqueeze(-1)
@@ -238,7 +227,7 @@ class Transformer(BaseModel):
         for layer in self.transformer_layers:
             x = layer(x, mask)
 
-        # Global average pooling: (batch_size, seq_len, d_model) → (batch_size, d_model)
+        # Global average over time → logits
         x = x.transpose(1, 2)  # (batch_size, d_model, seq_len)
         x = self.pool(x)  # (batch_size, d_model, 1)
         x = x.squeeze(-1)  # (batch_size, d_model)
