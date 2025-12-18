@@ -1,0 +1,217 @@
+{
+  "total_experiments": 54,
+  "successful_runs": 47,
+  "failed_runs": 7,
+  "skipped_runs": 0,
+  "by_model": {
+    "fcn": {
+      "accuracies": [
+        0.6572890025575447,
+        0.9195171026156942,
+        0.8500000000000001,
+        0.9083333333333333,
+        0.7692708333333333,
+        1.0,
+        0.6923076923076923,
+        0.7672955974842767,
+        0.5463659147869674
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.790042164046538,
+      "std_accuracy": 0.13578422146666796
+    },
+    "cnn": {
+      "accuracies": [
+        0.7186700767263428,
+        0.9382964453386989,
+        0.9,
+        0.8833333333333333,
+        0.8377604166666667,
+        1.0,
+        0.7516483516483516,
+        0.9433962264150942,
+        0.8596491228070176
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.8703059969928338,
+      "std_accuracy": 0.08568854150413525
+    },
+    "transformer": {
+      "accuracies": [
+        0.47570332480818417,
+        0.8485580147551978,
+        0.4833333333333334,
+        0.7333333333333334,
+        0.5325520833333334,
+        0.7450549450549451,
+        0.7869674185463659
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "FiftyWords",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.6579289218806704,
+      "std_accuracy": 0.14425983168541742
+    },
+    "cats": {
+      "accuracies": [
+        0.30434782608695654,
+        0.8011401743796109,
+        0.7166666666666667,
+        0.7749999999999999,
+        0.5705729166666667,
+        0.7648351648351648,
+        0.7744360902255639
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "FiftyWords",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.6724284055515185,
+      "std_accuracy": 0.16641046741538879
+    },
+    "autoformer": {
+      "accuracies": [
+        0.7297786720321932,
+        0.6,
+        0.8333333333333334,
+        0.5325520833333334,
+        0.5098901098901099,
+        0.8546365914786967
+      ],
+      "datasets": [
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "FiftyWords",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.6766984650112778,
+      "std_accuracy": 0.13753776961653455
+    },
+    "patchtst": {
+      "accuracies": [
+        0.5089514066496164,
+        0.8105298457411134,
+        0.6,
+        0.8333333333333334,
+        0.5486979166666667,
+        0.9985920434845958,
+        0.6681318681318681,
+        0.9371069182389937,
+        0.7819548872180451
+      ],
+      "datasets": [
+        "Adiac",
+        "ArrowHead",
+        "Beef",
+        "Car",
+        "ChlorineConcentration",
+        "CinCECGTorso",
+        "FiftyWords",
+        "HouseTwenty",
+        "KeplerLightCurves"
+      ],
+      "mean_accuracy": 0.7430331354960258,
+      "std_accuracy": 0.16187407099371762
+    }
+  },
+  "by_dataset": {
+    "Adiac": {
+      "fcn": 0.6572890025575447,
+      "cnn": 0.7186700767263428,
+      "transformer": 0.47570332480818417,
+      "cats": 0.30434782608695654,
+      "patchtst": 0.5089514066496164
+    },
+    "ArrowHead": {
+      "fcn": 0.9195171026156942,
+      "cnn": 0.9382964453386989,
+      "transformer": 0.8485580147551978,
+      "cats": 0.8011401743796109,
+      "autoformer": 0.7297786720321932,
+      "patchtst": 0.8105298457411134
+    },
+    "Beef": {
+      "fcn": 0.8500000000000001,
+      "cnn": 0.9,
+      "transformer": 0.4833333333333334,
+      "cats": 0.7166666666666667,
+      "autoformer": 0.6,
+      "patchtst": 0.6
+    },
+    "Car": {
+      "fcn": 0.9083333333333333,
+      "cnn": 0.8833333333333333,
+      "transformer": 0.7333333333333334,
+      "cats": 0.7749999999999999,
+      "autoformer": 0.8333333333333334,
+      "patchtst": 0.8333333333333334
+    },
+    "ChlorineConcentration": {
+      "fcn": 0.7692708333333333,
+      "cnn": 0.8377604166666667,
+      "transformer": 0.5325520833333334,
+      "cats": 0.5705729166666667,
+      "autoformer": 0.5325520833333334,
+      "patchtst": 0.5486979166666667
+    },
+    "CinCECGTorso": {
+      "fcn": 1.0,
+      "cnn": 1.0,
+      "patchtst": 0.9985920434845958
+    },
+    "FiftyWords": {
+      "fcn": 0.6923076923076923,
+      "cnn": 0.7516483516483516,
+      "transformer": 0.7450549450549451,
+      "cats": 0.7648351648351648,
+      "autoformer": 0.5098901098901099,
+      "patchtst": 0.6681318681318681
+    },
+    "HouseTwenty": {
+      "fcn": 0.7672955974842767,
+      "cnn": 0.9433962264150942,
+      "patchtst": 0.9371069182389937
+    },
+    "KeplerLightCurves": {
+      "fcn": 0.5463659147869674,
+      "cnn": 0.8596491228070176,
+      "transformer": 0.7869674185463659,
+      "cats": 0.7744360902255639,
+      "autoformer": 0.8546365914786967,
+      "patchtst": 0.7819548872180451
+    }
+  }
+}

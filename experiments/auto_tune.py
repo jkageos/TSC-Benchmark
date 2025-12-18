@@ -181,6 +181,8 @@ def tweak_from_summary(cfg: dict[str, Any], summary: dict[str, Any]) -> dict[str
     training["num_workers"] = training.get("num_workers", 2)
     training["use_tta"] = False
     training["use_swa"] = False
+    training["use_tta"] = False
+    training["use_swa"] = False
     training["use_compile"] = training.get("use_compile", True)
 
     # Check for failures first
