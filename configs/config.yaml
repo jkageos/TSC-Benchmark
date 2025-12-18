@@ -2,7 +2,7 @@
 
 # Execution mode and behavior
 execution:
-  mode: "benchmark"  # Options: benchmark, test, tune, single
+  mode: "benchmark" # Options: benchmark, test, tune, single
   verbose: true
   # Test mode settings
   test_model: "fcn"
@@ -89,11 +89,6 @@ models:
     max_seq_len: 5000
 
   cats:
-    type: "cats"
-    d_model: 128
-    num_heads: 4
-    num_layers: 3
-  cats:
     d_ff: 768
     d_model: 192
     dropout: 0.1
@@ -101,20 +96,20 @@ models:
 
   autoformer:
     type: "autoformer"
-    d_model: 96  # Reduced from 128
-    num_heads: 3  # Reduced from 4
-    num_layers: 1  # Reduced from 2
-    d_ff: 384  # Reduced from 512
+    d_model: 96 # Reduced from 128
+    num_heads: 3 # Reduced from 4
+    num_layers: 1 # Reduced from 2
+    d_ff: 384 # Reduced from 512
     dropout: 0.1
     factor: 1
     max_seq_len: 5000
 
   patchtst:
     type: "patchtst"
-    d_model: 96  # Reduced
-    num_heads: 3  # Reduced
-    num_layers: 1  # Reduced
-    d_ff: 384  # Reduced
+    d_model: 96 # Reduced
+    num_heads: 3 # Reduced
+    num_layers: 1 # Reduced
+    d_ff: 384 # Reduced
     dropout: 0.1
     patch_len: 16
     stride: 8
@@ -138,28 +133,28 @@ dataset_overrides:
     patience: 10
     num_workers: 0
   ChlorineConcentration:
-    batch_size: 16  # Reduced from 32
-    max_length: 128  # Aggressive truncation
+    batch_size: 16 # Reduced from 32
+    max_length: 128 # Aggressive truncation
     num_workers: 0
   FiftyWords:
     epochs: 120
     patience: 20
-    batch_size: 16  # Reduced from 32
+    batch_size: 16 # Reduced from 32
     max_length: 256
     num_workers: 0
   KeplerLightCurves:
-    batch_size: 16  # Reduced from 24
-    max_length: 128  # Aggressive truncation
+    batch_size: 16 # Reduced from 24
+    max_length: 128 # Aggressive truncation
     epochs: 60
     patience: 10
     num_workers: 0
   Adiac:
-    batch_size: 16  # Reduced from 32
-    max_length: 256  # More aggressive
+    batch_size: 16 # Reduced from 32
+    max_length: 256 # More aggressive
     num_workers: 0
   CinCECGTorso:
-    batch_size: 16  # Reduced from 32
-    max_length: 256  # Truncate long sequences
+    batch_size: 16 # Reduced from 32
+    max_length: 256 # Truncate long sequences
     num_workers: 0
   ArrowHead:
     batch_size: 32

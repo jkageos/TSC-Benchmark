@@ -99,7 +99,7 @@ def benchmark_model_on_dataset(
 
     # Small dataset → Cross-validation
     if dataset_info["n_train"] < 300:
-        print(f"⚠️  Small dataset ({dataset_info['n_train']} samples) → Using 5-fold CV\n")
+        print(f"⚠️  Small dataset ({dataset_info['n_train']} samples) → Using cross-validation\n")
         return benchmark_with_cross_validation(
             model_name=model_name,
             dataset_name=dataset_name,
@@ -109,6 +109,8 @@ def benchmark_model_on_dataset(
             epochs=epochs,
             patience=patience,
             model_overrides=model_overrides,
+            max_length=max_length,
+            k_folds=training_config.get("cv_folds", 5),
         )
 
     # Merge base model config with dataset-specific overrides
@@ -201,6 +203,7 @@ def benchmark_with_cross_validation(
     epochs: int,
     patience: int,
     model_overrides: dict[str, Any],
+    max_length: int | None = None,
     k_folds: int = 5,
 ) -> dict[str, Any]:
     """Benchmark with k-fold cross-validation (for small datasets)."""
@@ -208,7 +211,7 @@ def benchmark_with_cross_validation(
         dataset_name=dataset_name,
         normalize=config["training"]["normalize"],
         padding=config["training"]["padding"],
-        max_length=config["training"].get("max_length"),
+        max_length=max_length,
     )
 
     # Load combined dataset with guaranteed consistent sequence length
