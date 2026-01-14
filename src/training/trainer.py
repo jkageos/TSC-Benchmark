@@ -20,7 +20,6 @@ import torch.optim as optim
 from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from src.data.augmentation import TimeSeriesAugmentation
 from src.training.metrics import MetricsTracker
@@ -152,26 +151,6 @@ class Trainer:
         # Track validation metrics (full)
         self.val_metrics = MetricsTracker(num_classes, compute_confusion=True)
 
-        # Optimize dataloaders for repeated iteration
-        if hasattr(train_loader, "num_workers") and train_loader.num_workers > 0:
-            train_loader.persistent_workers = True
-            test_loader.persistent_workers = True
-
-    # Optimize DataLoader creation
-    def _create_optimized_dataloaders(
-        self, train_loader: DataLoader, test_loader: DataLoader
-    ) -> tuple[DataLoader, DataLoader]:
-        """
-        Wrap dataloaders with persistent_workers for speed.
-        Reduces overhead on repeated epoch iterations.
-        """
-        # Only enable if num_workers > 0 to avoid issues with single-process
-        if hasattr(train_loader, "num_workers") and train_loader.num_workers > 0:
-            train_loader.persistent_workers = True
-            test_loader.persistent_workers = True
-
-        return train_loader, test_loader
-
     def train(self) -> dict[str, Any]:
         """
         Main training loop with early stopping.
@@ -256,7 +235,7 @@ class Trainer:
         # Convert device to string type for autocast
         device_type = self.device.type  # "cuda" or "cpu"
 
-        for batch_idx, (x, y) in enumerate(tqdm(self.train_loader, desc="Training")):
+        for batch_idx, (x, y) in enumerate(self.train_loader):  # REMOVED: tqdm wrapper
             x, y = x.to(self.device), y.to(self.device)
 
             # Data augmentation
@@ -303,7 +282,7 @@ class Trainer:
         device_type = self.device.type  # "cuda" or "cpu"
 
         with torch.no_grad():
-            for x, y in tqdm(self.test_loader, desc="Validating"):
+            for x, y in self.test_loader:  # REMOVED: tqdm wrapper
                 x, y = x.to(self.device), y.to(self.device)
 
                 with torch.autocast(device_type, enabled=self.use_amp):

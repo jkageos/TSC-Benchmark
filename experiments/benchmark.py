@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 
 from experiments.cross_validate import cross_validate_dataset
 from src.data.loader import UCRDataLoader, load_ucr_dataset
@@ -339,25 +340,79 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
 
     all_results: list[dict[str, Any]] = []
 
-    for dataset_name in config["datasets"]:
-        for model_name in config["models"].keys():
-            result = benchmark_model_on_dataset(
-                model_name=model_name,
-                dataset_name=dataset_name,
-                config=config,
-                results_dir=results_dir,
-            )
-            all_results.append(result)
+    # Calculate total combinations for progress bar
+    total_combinations = len(config["datasets"]) * len(config["models"])
 
-            # Save incremental results
-            with open(results_dir / "results.json", "w") as f:
-                json.dump(all_results, f, indent=2)
+    print(f"\n{'=' * 80}")
+    print("🚀 BENCHMARK SUITE")
+    print(f"{'=' * 80}")
+    print(f"📊 Datasets: {len(config['datasets'])}")
+    print(f"🧠 Models: {len(config['models'])}")
+    print(f"🔢 Total combinations: {total_combinations}")
+    print(f"💾 Results: {results_dir}")
+    print(f"{'=' * 80}\n")
+
+    # Track successful/failed runs
+    successful_runs = 0
+    failed_runs = 0
+
+    # Create progress bar with enhanced formatting
+    with tqdm(
+        total=total_combinations,
+        desc="Progress",
+        unit="combo",
+        ncols=100,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        colour="green",
+    ) as pbar:
+        for dataset_idx, dataset_name in enumerate(config["datasets"], 1):
+            for model_idx, model_name in enumerate(config["models"].keys(), 1):
+                # Create detailed status message
+                status_msg = (
+                    f"[{dataset_idx}/{len(config['datasets'])}] {dataset_name:20s} | "
+                    f"[{model_idx}/{len(config['models'])}] {model_name:12s}"
+                )
+                pbar.set_description(status_msg)
+
+                result = benchmark_model_on_dataset(
+                    model_name=model_name,
+                    dataset_name=dataset_name,
+                    config=config,
+                    results_dir=results_dir,
+                )
+                all_results.append(result)
+
+                # Track success/failure
+                if "error" in result:
+                    failed_runs += 1
+                    pbar.write(f"❌ {model_name} on {dataset_name}: {result.get('error', 'Unknown error')}")
+                else:
+                    successful_runs += 1
+                    acc = result.get("accuracy", 0.0)
+                    f1 = result.get("f1_macro", 0.0)
+                    pbar.write(f"✅ {model_name:12s} on {dataset_name:20s} | Acc: {acc:.4f} | F1: {f1:.4f}")
+
+                # Update progress bar
+                pbar.update(1)
+
+                # Save incremental results
+                with open(results_dir / "results.json", "w") as f:
+                    json.dump(all_results, f, indent=2)
+
+    # Final summary
+    print(f"\n{'=' * 80}")
+    print("📈 BENCHMARK SUMMARY")
+    print(f"{'=' * 80}")
+    print(f"✅ Successful runs: {successful_runs}/{total_combinations}")
+    print(f"❌ Failed runs: {failed_runs}/{total_combinations}")
+    print(f"📁 Results saved to: {results_dir}")
+    print(f"{'=' * 80}\n")
 
     # Save final config snapshot
     with open(results_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    print(f"\n✅ Benchmark complete! Results saved to {results_dir}")
+    print(f"✅ Benchmark complete! Results saved to {results_dir}")
 
 
 def run_model_test(

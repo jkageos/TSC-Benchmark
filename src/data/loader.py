@@ -264,7 +264,7 @@ def load_ucr_dataset(
         )
         num_workers = recommendation["recommended_workers"]
         print(f"🔧 Auto-selected num_workers={num_workers}")
-        print(f"   Reason: {recommendation['reason']}")
+        print(f"   Reason: {recommendation['reason']}\n")
     else:
         # Validate and clamp manual num_workers
         max_safe = get_safe_num_workers(
