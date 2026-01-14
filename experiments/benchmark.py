@@ -45,7 +45,7 @@ def benchmark_model_on_dataset(
 
     # Print system resources at start
     resources = get_system_resources()
-    print(f"\n📊 System Resources:")
+    print("\n📊 System Resources:")
     print(f"   CPU: {resources['cpu_count']} cores @ {resources['cpu_percent']:.1f}% utilization")
     print(f"   Memory: {resources['memory_available_gb']:.1f}/{resources['memory_total_gb']:.1f} GB available")
     if "gpu_name" in resources:
@@ -111,6 +111,7 @@ def benchmark_model_on_dataset(
             model_overrides=model_overrides,
             max_length=max_length,
             k_folds=training_config.get("cv_folds", 5),
+            results_dir=results_dir,  # NEW: Pass results directory
         )
 
     # Merge base model config with dataset-specific overrides
@@ -205,6 +206,7 @@ def benchmark_with_cross_validation(
     model_overrides: dict[str, Any],
     max_length: int | None = None,
     k_folds: int = 5,
+    results_dir: Path | None = None,  # NEW: Accept results directory
 ) -> dict[str, Any]:
     """Benchmark with k-fold cross-validation (for small datasets)."""
     loader = UCRDataLoader(
@@ -229,7 +231,7 @@ def benchmark_with_cross_validation(
     }
 
     # Verify dataset info matches combined data
-    print(f"\nCombined dataset for CV:")
+    print("\nCombined dataset for CV:")
     print(f"  Total samples: {X_full.shape[0]}")
     print(f"  Sequence length: {actual_sequence_length}")
     print(f"  Classes: {len(np.unique(y_full))}\n")
@@ -257,6 +259,11 @@ def benchmark_with_cross_validation(
 
     criterion = nn.CrossEntropyLoss()
 
+    # Create checkpoint directory inside results
+    checkpoint_base_dir = None
+    if config.get("results", {}).get("save_checkpoints", True) and results_dir is not None:
+        checkpoint_base_dir = results_dir / "checkpoints" / "cross_validation" / model_name / dataset_name
+
     start_time = time.time()
     cv_results = cross_validate_dataset(
         model_fn=create_model_fn,
@@ -272,6 +279,7 @@ def benchmark_with_cross_validation(
         hardware_config=config.get("hardware", {}),
         training_config=config.get("training", {}),
         save_checkpoints=config.get("results", {}).get("save_checkpoints", True),
+        checkpoint_base_dir=checkpoint_base_dir,  # NEW: Pass checkpoint directory
     )
     training_time = time.time() - start_time
 

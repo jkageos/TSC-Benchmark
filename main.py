@@ -95,7 +95,7 @@ def main() -> None:
 
     else:
         print(f"❌ Unknown mode: {mode}")
-        print(f"Available modes: benchmark, test, tune, single")
+        print("Available modes: benchmark, test, tune, single")
         sys.exit(1)
 
     print("\n✅ Execution complete!")

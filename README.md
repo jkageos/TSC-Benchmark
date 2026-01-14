@@ -14,6 +14,7 @@ A comprehensive neural network benchmarking framework for time series classifica
 ## Datasets
 
 Benchmarked on 9 UCR time series classification datasets:
+
 - Adiac
 - ArrowHead
 - Beef
@@ -27,11 +28,13 @@ Benchmarked on 9 UCR time series classification datasets:
 ## Features
 
 - **Multiple Training Strategies**
+
   - Standard train/test split for large datasets (n_train ≥ 300)
   - k-fold cross-validation for small datasets (n_train < 300)
   - Stratified sampling to preserve class distribution
 
 - **Advanced Training Techniques**
+
   - Mixed precision training (AMP) for faster convergence
   - Learning rate warmup + cosine annealing scheduling
   - Early stopping with configurable patience
@@ -40,6 +43,7 @@ Benchmarked on 9 UCR time series classification datasets:
   - Test-Time Augmentation (TTA) for ensemble-like inference
 
 - **Data Augmentation**
+
   - Jittering (Gaussian noise injection)
   - Random scaling
   - Magnitude warping
@@ -47,6 +51,7 @@ Benchmarked on 9 UCR time series classification datasets:
   - Configurable probability per augmentation type
 
 - **Memory & Performance Optimization**
+
   - Automatic GPU memory monitoring and capacity reduction
   - `torch.compile` support for inference speedup
   - Flash Attention integration for transformer models (when available)
@@ -81,21 +86,27 @@ uv run python test_cuda.py
 ## Running Benchmarks
 
 ### Quick Test
+
 Test a single model on the smallest dataset (Beef with 30 samples):
+
 ```bash
 uv run python main.py
 # Set execution.mode = "test" in configs/config.yaml
 ```
 
 ### Full Benchmark Suite
+
 Run all models on all datasets:
+
 ```bash
 uv run python main.py
 # Set execution.mode = "benchmark" in configs/config.yaml
 ```
 
 ### Single Model-Dataset Combination
+
 Debug or profile a specific model/dataset pair:
+
 ```bash
 uv run python main.py
 # Set execution.mode = "single" in configs/config.yaml
@@ -103,7 +114,9 @@ uv run python main.py
 ```
 
 ### Auto-Tuning
+
 Iteratively improve hyperparameters based on benchmark results:
+
 ```bash
 uv run python main.py
 # Set execution.mode = "tune" in configs/config.yaml
@@ -153,19 +166,22 @@ TSC-Benchmark/
 │   ├── auto_tune.py                 # Automatic hyperparameter tuning
 │   └── __init__.py
 │
-├── checkpoints/                     # Saved model checkpoints per fold
-│   ├── fold_1/
-│   ├── fold_2/
-│   ├── fold_3/
-│   ├── fold_4/
-│   └── fold_5/
-│
 ├── results/                         # Benchmark results and logs
 │   └── YYYYMMDD_HHMMSS/             # Timestamped result directories
 │       ├── results.json             # Per-model accuracy and metrics
 │       ├── summary.json             # Aggregated summary by dataset/model
 │       ├── config.json              # Config snapshot for reproducibility
 │       └── checkpoints/             # Model weights
+│           ├── {model_name}/        # Standard train/test checkpoints
+│           │   └── {dataset_name}/
+│           └── cross_validation/    # Cross-validation checkpoints
+│               └── {model_name}/
+│                   └── {dataset_name}/
+│                       ├── fold_1/
+│                       ├── fold_2/
+│                       ├── fold_3/
+│                       ├── fold_4/
+│                       └── fold_5/
 │
 ├── data/
 │   └── cache/                       # Local UCR dataset cache
@@ -222,12 +238,12 @@ models:
     hidden_dims: [512, 256]
     dropout_rate: 0.5
     use_batch_norm: true
-  
+
   cnn:
     kernel_size: 3
     num_filters: [64, 128, 256]
     dropout_rate: 0.5
-  
+
   transformer:
     d_model: 256
     num_heads: 8
@@ -276,6 +292,7 @@ datasets:
 5. Register in [`create_model()`](src/utils/config.py) factory function
 
 Example:
+
 ```python
 from src.models.base import BaseModel
 
@@ -283,7 +300,7 @@ class YourModel(BaseModel):
     def __init__(self, num_classes: int, input_length: int, input_channels: int = 1, **kwargs):
         super().__init__(num_classes)
         # Initialize layers
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Normalize to (B, T, C)
         # Process through layers
@@ -314,6 +331,7 @@ benchmark.py [experiments/benchmark.py]
 ### Cross-Validation Workflow
 
 For datasets with < 300 training samples:
+
 1. Load full combined data (train + test)
 2. Apply z-score normalization on full dataset
 3. Split into k folds with stratified sampling
@@ -344,6 +362,7 @@ See [`auto_tune.py`](experiments/auto_tune.py) for details.
 ### Tracked Metrics
 
 Per epoch:
+
 - Training loss and accuracy
 - Validation loss and accuracy
 - Validation F1 (macro and weighted)
@@ -351,6 +370,7 @@ Per epoch:
 - Confusion matrix
 
 Per run:
+
 - Best validation accuracy
 - Best validation F1
 - Training time
@@ -384,6 +404,7 @@ Results saved to `results/YYYYMMDD_HHMMSS/results.json`
 ## System Resource Management
 
 The framework automatically:
+
 - Detects GPU memory and reduces model capacity if needed
 - Recommends safe number of DataLoader workers
 - Monitors CPU load and adjusts parallelization
@@ -410,6 +431,7 @@ See [`system.py`](src/utils/system.py) for resource monitoring utilities.
 ## References
 
 This implementation is informed by:
+
 1. **CATS** - https://github.com/dongbeank/CATS
 2. **Autoformer** - https://github.com/thuml/Autoformer
 3. **Time-Series-Library** - https://github.com/thuml/Time-Series-Library
@@ -420,12 +442,24 @@ This implementation is informed by:
 
 ### Running Tests
 
-```bash
-# Quick validation on Beef dataset
-uv run python main.py  # with mode: test
+Run all tests in the tests folder (requires CUDA):
 
-# Test single model
-python -m pytest tests/ -v  # (test suite planned)
+```bash
+uv run pytest -v tests/
+```
+
+Run a single test:
+
+```bash
+uv run pytest tests/test_cuda.py::test_cuda_device -q
+```
+
+In Visual Studio Code, use the Test Explorer (pytest) to discover and run tests in [tests/test_cuda.py](tests/test_cuda.py).
+
+If CUDA is not available, tests in [tests/test_cuda.py](tests/test_cuda.py) will fail. Verify CUDA first:
+
+```bash
+uv run python tests/test_cuda.py
 ```
 
 ### Code Quality
@@ -441,18 +475,21 @@ ruff check src/ experiments/
 ### Troubleshooting
 
 **CUDA Not Available**
+
 ```bash
 uv run python test_cuda.py
 # Install CUDA-enabled PyTorch if needed
 ```
 
 **Out of Memory (OOM)**
+
 - Reduce `batch_size` in config
 - Set `use_amp: true` for mixed precision
 - Enable auto-capacity reduction (automatic on low memory)
 - Reduce `max_length` for sequence truncation
 
 **Poor Model Performance**
+
 - Increase `epochs` or reduce `patience`
 - Tune `learning_rate` and `warmup_epochs`
 - Enable `use_augmentation: true`

@@ -124,7 +124,7 @@ def apply_failure_recovery(cfg: dict[str, Any], failed: list[tuple[str, str]]) -
         # Reduce CV folds for small datasets
         if ds_override.get("cv_folds", training.get("cv_folds", 3)) > 3:
             ds_override["cv_folds"] = 3
-            print(f"   Reducing cv_folds to 3")
+            print("   Reducing cv_folds to 3")
 
         # Model-specific capacity reductions
         for model in failed_models:
@@ -144,10 +144,10 @@ def apply_failure_recovery(cfg: dict[str, Any], failed: list[tuple[str, str]]) -
         if "max_length" not in ds_override:
             if ds in ("ChlorineConcentration", "KeplerLightCurves"):
                 ds_override["max_length"] = 256
-                print(f"   Setting max_length to 256 (aggressive truncation)")
+                print("   Setting max_length to 256 (aggressive truncation)")
             elif ds in ("Adiac", "FiftyWords"):
                 ds_override["max_length"] = 512
-                print(f"   Setting max_length to 512")
+                print("   Setting max_length to 512")
         else:
             # If already set, reduce further
             current_max = ds_override["max_length"]
