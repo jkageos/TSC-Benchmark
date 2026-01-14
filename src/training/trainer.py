@@ -140,9 +140,6 @@ class Trainer:
         if use_tta:
             self.tta = TestTimeAugmentation(model, n_augmentations=tta_augmentations)
 
-        # Metrics tracking
-        self.metrics_tracker = MetricsTracker(num_classes)
-
         # Early stopping state
         self.best_loss = float("inf")
         self.best_epoch = 0
@@ -250,7 +247,7 @@ class Trainer:
     def train_epoch(self) -> tuple[float, float]:
         """Train for one epoch."""
         self.model.train()
-        self.metrics_tracker.reset()
+        self.train_metrics.reset()
         total_loss = 0.0
 
         # Accumulate gradients to simulate larger batch without memory cost
@@ -289,17 +286,17 @@ class Trainer:
                 self.optimizer.zero_grad()
 
             total_loss += loss.item() * accumulation_steps
-            self.metrics_tracker.update(outputs.detach(), y.detach())
+            self.train_metrics.update(outputs.detach(), y.detach())
 
         avg_loss = total_loss / len(self.train_loader)
-        accuracy = self.metrics_tracker.get_accuracy()
+        accuracy = self.train_metrics.get_accuracy()
 
         return avg_loss, accuracy
 
     def validate_epoch(self) -> tuple[float, dict[str, Any]]:
         """Validate for one epoch."""
         self.model.eval()
-        self.metrics_tracker.reset()
+        self.val_metrics.reset()
         total_loss = 0.0
 
         # Convert device to string type for autocast
@@ -318,9 +315,9 @@ class Trainer:
                     loss = self.criterion(outputs, y)
 
                 total_loss += loss.item()
-                self.metrics_tracker.update(outputs, y)
+                self.val_metrics.update(outputs, y)
 
         avg_loss = total_loss / len(self.test_loader)
-        metrics = self.metrics_tracker.compute()
+        metrics = self.val_metrics.compute()
 
         return avg_loss, metrics
