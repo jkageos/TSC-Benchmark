@@ -71,7 +71,7 @@ def benchmark_model_on_dataset(
     # Extract model-specific overrides
     model_overrides = dataset_overrides.get("models", {}).get(model_name, {})
 
-    # Load dataset first to get sequence info
+    # Load dataset first to get sequence info (DISABLE auto_workers on first load)
     try:
         train_loader, test_loader, dataset_info = load_ucr_dataset(
             dataset_name=dataset_name,
@@ -81,7 +81,7 @@ def benchmark_model_on_dataset(
             max_length=max_length,
             num_workers=training_config.get("num_workers", 0),
             max_cpu_load=hardware_config.get("max_cpu_load", 0.5),
-            auto_workers=hardware_config.get("auto_workers", False),
+            auto_workers=False,  # Disable to avoid double messages
             max_workers_override=hardware_config.get("max_workers_override"),
         )
     except Exception as e:
@@ -106,7 +106,7 @@ def benchmark_model_on_dataset(
         )
         batch_size = recommended_batch_size
 
-        # Reload dataloaders with optimized batch size
+        # Reload dataloaders with optimized batch size (NOW enable auto_workers)
         train_loader, test_loader, dataset_info = load_ucr_dataset(
             dataset_name=dataset_name,
             batch_size=batch_size,
@@ -115,7 +115,7 @@ def benchmark_model_on_dataset(
             max_length=max_length,
             num_workers=training_config.get("num_workers", 0),
             max_cpu_load=hardware_config.get("max_cpu_load", 0.5),
-            auto_workers=hardware_config.get("auto_workers", False),
+            auto_workers=hardware_config.get("auto_workers", False),  # Use config value
             max_workers_override=hardware_config.get("max_workers_override"),
         )
 

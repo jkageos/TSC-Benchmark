@@ -158,19 +158,27 @@ class UCRDataLoader:
         # Return cached if exists
         if cache_file.exists():
             with open(cache_file, "rb") as f:
-                return pickle.load(f)
+                cached_data = pickle.load(f)
+                # Handle both old (4-tuple) and new (2-tuple) cache formats
+                if len(cached_data) == 4:
+                    X_train, y_train, X_test, y_test = cached_data
+                    X_combined = np.vstack([X_train, X_test])
+                    y_combined = np.concatenate([y_train, y_test])
+                    return X_combined, y_combined
+                else:
+                    return cached_data
 
         # Load fresh, then cache
         X_train, y_train, X_test, y_test = self.load_data()
 
-        self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(cache_file, "wb") as f:
-            pickle.dump((X_train, y_train, X_test, y_test), f)
-
-        # Both X_train and X_test are now guaranteed to have same sequence_length
-        # from load_data() method, so safe to combine
+        # Combine train and test
         X_combined = np.vstack([X_train, X_test])
         y_combined = np.concatenate([y_train, y_test])
+
+        # Cache the combined data (not the separate splits)
+        self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(cache_file, "wb") as f:
+            pickle.dump((X_combined, y_combined), f)
 
         return X_combined, y_combined
 
