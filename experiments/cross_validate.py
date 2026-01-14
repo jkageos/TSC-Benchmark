@@ -72,13 +72,11 @@ def cross_validate_dataset(
         ),
     )
 
-    # Ensure X has consistent sequence length BEFORE splitting
+    # REMOVED: Dataset shape verification print (silent validation)
     if X.ndim != 2:
         raise ValueError(f"Expected 2D input (batch, seq_len), got shape {X.shape}")
 
     expected_length = X.shape[1]
-    print(f"Cross-validation dataset shape: {X.shape}")
-    print(f"  Samples: {X.shape[0]}, Sequence length: {expected_length}")
 
     if expected_length < 1:
         raise ValueError(f"Invalid sequence length: {expected_length}")
@@ -89,20 +87,16 @@ def cross_validate_dataset(
     fold_f1_scores: list[float] = []
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
-        print(f"\n{'=' * 60}")
-        print(f"Fold {fold + 1}/{k_folds}")
-        print(f"{'=' * 60}")
+        # REMOVED: Fold header print (silent training)
 
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
 
-        # Verify shapes are consistent (should always pass now)
-        assert X_train.shape[1] == expected_length, (
-            f"Train fold shape mismatch: {X_train.shape[1]} vs {expected_length}"
-        )
-        assert X_val.shape[1] == expected_length, f"Val fold shape mismatch: {X_val.shape[1]} vs {expected_length}"
+        # Verify shapes are consistent
+        assert X_train.shape[1] == expected_length
+        assert X_val.shape[1] == expected_length
 
-        print(f"  Train: {X_train.shape[0]} samples, Val: {X_val.shape[0]} samples")
+        # REMOVED: Sample count print
 
         # Create datasets and loaders
         train_dataset = TimeSeriesDataset(X_train, y_train)
@@ -134,8 +128,7 @@ def cross_validate_dataset(
             model = model_fn()
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                print(f"❌ OOM during model creation for fold {fold + 1}: {e}")
-                # Skip this fold
+                # Skip this fold silently
                 fold_accuracies.append(0.0)
                 fold_f1_scores.append(0.0)
                 continue
@@ -143,10 +136,9 @@ def cross_validate_dataset(
 
         optimizer = optimizer_fn(model)
 
-        # Trainer setup - use results directory structure
+        # Trainer setup
         checkpoint_path: str | None = None
         if save_checkpoints and checkpoint_base_dir is not None:
-            # Create checkpoint path inside results directory
             checkpoint_path = str(Path(checkpoint_base_dir) / f"fold_{fold + 1}")
 
         trainer = Trainer(
@@ -157,8 +149,9 @@ def cross_validate_dataset(
             criterion=criterion,
             num_classes=num_classes,
             epochs=epochs,
-            device=device,
             patience=patience,
+            device=device,
+            checkpoint_dir=checkpoint_path or "checkpoints",
             use_scheduler=use_scheduler,
             warmup_epochs=warmup_epochs,
             use_amp=use_amp,
@@ -170,17 +163,14 @@ def cross_validate_dataset(
             tta_augmentations=tta_augmentations,
             use_swa=use_swa,
             swa_start=swa_start,
-            checkpoint_dir=checkpoint_path if checkpoint_path else "checkpoints",
             save_checkpoints=save_checkpoints,
         )
 
-        # Train this fold
         try:
             history = trainer.train()
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                print(f"❌ OOM during training for fold {fold + 1}: {e}")
-                # Skip this fold
+                # Skip this fold silently
                 fold_accuracies.append(0.0)
                 fold_f1_scores.append(0.0)
                 torch.cuda.empty_cache()
@@ -194,9 +184,7 @@ def cross_validate_dataset(
         fold_accuracies.append(best_metrics["accuracy"])
         fold_f1_scores.append(best_metrics["f1_macro"])
 
-        print(f"\nFold {fold + 1} Results:")
-        print(f"  Accuracy: {best_metrics['accuracy']:.4f}")
-        print(f"  F1 (macro): {best_metrics['f1_macro']:.4f}")
+        # REMOVED: Fold results print (silent)
 
     # Aggregate results
     if fold_accuracies:
@@ -207,11 +195,7 @@ def cross_validate_dataset(
     else:
         mean_acc = std_acc = mean_f1 = std_f1 = 0.0
 
-    print(f"\n{'=' * 60}")
-    print(f"Cross-Validation Results ({k_folds} folds)")
-    print(f"{'=' * 60}")
-    print(f"Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
-    print(f"F1 (macro): {mean_f1:.4f} ± {std_f1:.4f}")
+    # REMOVED: Summary print (handled by benchmark progress bar)
 
     return {
         "mean_accuracy": mean_acc,

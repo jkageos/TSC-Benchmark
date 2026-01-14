@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -47,16 +46,8 @@ def benchmark_model_on_dataset(
     """
     clear_cuda_memory()
 
-    # Print system resources at start
-    resources = get_system_resources()
-    print("\n📊 System Resources:")
-    print(f"   CPU: {resources['cpu_count']} cores @ {resources['cpu_percent']:.1f}% utilization")
-    print(f"   Memory: {resources['memory_available_gb']:.1f}/{resources['memory_total_gb']:.1f} GB available")
-    if "gpu_name" in resources:
-        print(
-            f"   GPU: {resources['gpu_name']} ({resources['gpu_memory_total_gb']:.1f}GB VRAM, "
-            f"{resources.get('gpu_memory_free_gb', 0):.2f}GB free)\n"
-        )
+    # REMOVED: System resources print (too verbose)
+    # Only print critical information
 
     # Extract configs
     hardware_config = config.get("hardware", {})
@@ -82,15 +73,14 @@ def benchmark_model_on_dataset(
             max_length=max_length,
             num_workers=training_config.get("num_workers", 0),
             max_cpu_load=hardware_config.get("max_cpu_load", 0.5),
-            auto_workers=False,  # Disable to avoid double messages
+            auto_workers=False,  # Disable to avoid messages
             max_workers_override=hardware_config.get("max_workers_override"),
         )
     except Exception as e:
-        print(f"Error loading dataset {dataset_name}: {e}")
-        clear_cuda_memory()
-        return {"error": str(e)}
+        return {"error": f"Dataset loading failed: {e}"}
 
-    # **SINGLE optimization point - before deciding CV vs train/test**
+    # **SINGLE optimization point - silent**
+    resources = get_system_resources()
     gpu_memory_gb = resources.get("gpu_memory_total_gb", 6.0)
     recommended_batch_size = recommend_batch_size(
         dataset_size=dataset_info["n_train"],
@@ -98,16 +88,11 @@ def benchmark_model_on_dataset(
         gpu_memory_gb=gpu_memory_gb,
     )
 
-    # Use recommendation if it differs significantly (≥25% improvement)
+    # Use recommendation if significantly better (silent optimization)
     if recommended_batch_size > batch_size * 1.25:
-        print("⚡ Batch size optimization:")
-        print(f"   Config: {batch_size}, Recommended: {recommended_batch_size}")
-        print(
-            f"   → Using {recommended_batch_size} for {(recommended_batch_size / batch_size - 1) * 100:.0f}% speedup\n"
-        )
         batch_size = recommended_batch_size
 
-        # Reload dataloaders with optimized batch size (NOW enable auto_workers)
+        # Reload dataloaders with optimized batch size (silent)
         train_loader, test_loader, dataset_info = load_ucr_dataset(
             dataset_name=dataset_name,
             batch_size=batch_size,
@@ -116,27 +101,20 @@ def benchmark_model_on_dataset(
             max_length=max_length,
             num_workers=training_config.get("num_workers", 0),
             max_cpu_load=hardware_config.get("max_cpu_load", 0.5),
-            auto_workers=hardware_config.get("auto_workers", False),  # Use config value
+            auto_workers=hardware_config.get("auto_workers", False),
             max_workers_override=hardware_config.get("max_workers_override"),
         )
 
-    # Print dataset info
-    print(f"Dataset: {dataset_name}")
-    print(f"  Train samples: {dataset_info['n_train']}")
-    print(f"  Test samples: {dataset_info['n_test']}")
-    print(f"  Classes: {dataset_info['n_classes']}")
-    print(f"  Sequence length: {dataset_info['sequence_length']}")
-    print(f"  Batch size: {batch_size}\n")
+    # REMOVED: Dataset info print (too verbose)
 
-    # Small dataset → Cross-validation (with already-optimized batch_size)
+    # Small dataset → Cross-validation (silent)
     if dataset_info["n_train"] < 300:
-        print(f"⚠️  Small dataset ({dataset_info['n_train']} samples) → Using cross-validation\n")
         return benchmark_with_cross_validation(
             model_name=model_name,
             dataset_name=dataset_name,
             config=config,
             dataset_info=dataset_info,
-            batch_size=batch_size,  # Already optimized!
+            batch_size=batch_size,
             epochs=epochs,
             patience=patience,
             model_overrides=model_overrides,
@@ -159,7 +137,6 @@ def benchmark_model_on_dataset(
             input_channels=1,
         )
     except RuntimeError as e:
-        print(f"❌ Model creation failed: {e}")
         clear_cuda_memory()
         return {"error": f"Model creation failed: {e}"}
 
@@ -200,7 +177,6 @@ def benchmark_model_on_dataset(
         history = trainer.train()
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
-            print(f"❌ Out of memory during training: {e}")
             clear_cuda_memory()
             return {"error": f"OOM during training: {e}"}
         raise
@@ -247,25 +223,19 @@ def benchmark_with_cross_validation(
         max_length=max_length,
     )
 
-    # Load combined dataset with guaranteed consistent sequence length
+    # Load combined dataset (silent - no prints)
     X_full, y_full = loader.load_data_for_cross_validation()
 
-    # **CRITICAL**: Get actual sequence length from loaded data, not dataset_info
-    # dataset_info was computed from original train/test split before truncation/padding
     actual_sequence_length = X_full.shape[1]
 
-    # Update dataset_info with actual sequence length for model instantiation
+    # Update dataset_info with actual sequence length
     dataset_info = {
         **dataset_info,
         "sequence_length": actual_sequence_length,
-        "n_train": X_full.shape[0],  # Combined dataset size for logging
+        "n_train": X_full.shape[0],
     }
 
-    # Verify dataset info matches combined data
-    print("\nCombined dataset for CV:")
-    print(f"  Total samples: {X_full.shape[0]}")
-    print(f"  Sequence length: {actual_sequence_length}")
-    print(f"  Classes: {len(np.unique(y_full))}\n")
+    # REMOVED: CV dataset info print (too verbose)
 
     # Merge base model config with dataset-specific overrides
     base_model_config = config["models"][model_name].copy()
@@ -276,7 +246,7 @@ def benchmark_with_cross_validation(
             model_name=model_name,
             model_config=base_model_config,
             num_classes=dataset_info["n_classes"],
-            input_length=actual_sequence_length,  # Use actual length, not original
+            input_length=actual_sequence_length,
             input_channels=1,
         )
 
@@ -290,7 +260,6 @@ def benchmark_with_cross_validation(
 
     criterion = nn.CrossEntropyLoss()
 
-    # Create checkpoint directory inside results
     checkpoint_base_dir: str | None = None
     if config.get("results", {}).get("save_checkpoints", True) and results_dir is not None:
         checkpoint_path = results_dir / "checkpoints" / "cross_validation" / model_name / dataset_name
@@ -343,6 +312,7 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
     # Calculate total combinations for progress bar
     total_combinations = len(config["datasets"]) * len(config["models"])
 
+    # Print header ONCE before progress bar starts
     print(f"\n{'=' * 80}")
     print("🚀 BENCHMARK SUITE")
     print(f"{'=' * 80}")
@@ -359,21 +329,24 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
     # Create progress bar with enhanced formatting
     with tqdm(
         total=total_combinations,
-        desc="Progress",
-        unit="combo",
+        desc="Overall Progress",
+        unit="run",
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
         ncols=100,
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         colour="green",
+        position=0,
+        leave=True,
     ) as pbar:
         for dataset_idx, dataset_name in enumerate(config["datasets"], 1):
             for model_idx, model_name in enumerate(config["models"].keys(), 1):
-                # Create detailed status message
-                status_msg = (
-                    f"[{dataset_idx}/{len(config['datasets'])}] {dataset_name:20s} | "
-                    f"[{model_idx}/{len(config['models'])}] {model_name:12s}"
-                )
-                pbar.set_description(status_msg)
+                # Compact status message
+                current_combo = (dataset_idx - 1) * len(config["models"]) + model_idx
+                status = f"{model_name:12s} on {dataset_name:20s}"
 
+                # Update description without creating new line
+                pbar.set_description(f"[{current_combo}/{total_combinations}] {status}")
+
+                # Run benchmark (all prints will appear above progress bar)
                 result = benchmark_model_on_dataset(
                     model_name=model_name,
                     dataset_name=dataset_name,
@@ -382,15 +355,16 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
                 )
                 all_results.append(result)
 
-                # Track success/failure
+                # Track success/failure and print summary line
                 if "error" in result:
                     failed_runs += 1
-                    pbar.write(f"❌ {model_name} on {dataset_name}: {result.get('error', 'Unknown error')}")
+                    pbar.write(f"❌ FAILED | {status} | {result.get('error', 'Unknown error')}")
                 else:
                     successful_runs += 1
                     acc = result.get("accuracy", 0.0)
                     f1 = result.get("f1_macro", 0.0)
-                    pbar.write(f"✅ {model_name:12s} on {dataset_name:20s} | Acc: {acc:.4f} | F1: {f1:.4f}")
+                    time_taken = result.get("training_time", 0.0)
+                    pbar.write(f"✅ SUCCESS | {status} | Acc: {acc:6.4f} | F1: {f1:6.4f} | Time: {time_taken:5.1f}s")
 
                 # Update progress bar
                 pbar.update(1)
@@ -399,7 +373,7 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
                 with open(results_dir / "results.json", "w") as f:
                     json.dump(all_results, f, indent=2)
 
-    # Final summary
+    # Final summary (after progress bar completes)
     print(f"\n{'=' * 80}")
     print("📈 BENCHMARK SUMMARY")
     print(f"{'=' * 80}")

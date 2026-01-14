@@ -199,16 +199,7 @@ class Trainer:
             else:
                 self.patience_counter += 1
 
-            # Progress
-            print(
-                f"Epoch {epoch + 1}/{self.epochs} | "
-                f"Train Loss: {train_loss:.4f}, Acc: {train_accuracy:.4f} | "
-                f"Val Loss: {val_loss:.4f}, Acc: {val_metrics['accuracy']:.4f}, "
-                f"F1: {val_metrics['f1_macro']:.4f}"
-            )
-
             if self.patience_counter >= self.patience:
-                print(f"Early stopping at epoch {epoch + 1}")
                 break
 
         # Restore best model

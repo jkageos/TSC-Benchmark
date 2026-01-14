@@ -8,8 +8,12 @@ Supports multiple modes via configuration:
 - single: Single model-dataset combo for debugging
 
 All behavior controlled via configs/config.yaml
+
+Command-line flags:
+- -p, --plot [PATH]: Generate visualizations from results directory or latest run
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -17,8 +21,52 @@ from src.utils.config import load_config
 from src.utils.logger import setup_logging
 
 
+def setup_arg_parser() -> argparse.ArgumentParser:
+    """Create and configure argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="tsc-benchmark",
+        description="Time Series Classification Benchmark Suite",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run benchmark (mode from config.yaml)
+  uv run python main.py
+
+  # Generate visualizations from latest results
+  uv run python main.py -p
+
+  # Generate visualizations from specific run
+  uv run python main.py -p results/20251212_001253
+
+  # Generate visualizations from results directory
+  uv run python main.py --plot results
+        """,
+    )
+
+    parser.add_argument(
+        "-p",
+        "--plot",
+        nargs="?",
+        const="results",
+        metavar="PATH",
+        help="Generate visualizations from results directory or latest run (default: results)",
+    )
+
+    return parser
+
+
 def main() -> None:
-    """Main entry point - mode selected from config."""
+    """Main entry point - mode selected from config or CLI flag."""
+    parser = setup_arg_parser()
+    args = parser.parse_args()
+
+    # Check for visualization flag
+    if args.plot is not None:
+        from src.utils.visualizations import generate_all_visualizations
+
+        generate_all_visualizations(args.plot)
+        return
+
     config_path = Path("configs/config.yaml")
     config = load_config(str(config_path))
 
@@ -48,9 +96,6 @@ def main() -> None:
         results_dir = Path(config["results"]["save_dir"]) / "test_run"
         results_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"Testing {test_model.upper()} on {test_dataset}...\n")
-
-        # Run single model-dataset combo directly (no subprocess)
         result = benchmark_model_on_dataset(
             model_name=test_model,
             dataset_name=test_dataset,
