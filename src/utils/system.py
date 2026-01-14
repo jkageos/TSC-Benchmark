@@ -182,3 +182,32 @@ def validate_worker_config(num_workers: int, max_cpu_load: float = 0.5) -> tuple
         return 0, warning
 
     return num_workers, ""
+
+
+def recommend_batch_size(
+    dataset_size: int,
+    sequence_length: int,
+    gpu_memory_gb: float = 6.0,
+) -> int:
+    """
+    Recommend batch size for max throughput while respecting memory.
+
+    Strategy:
+    - Large sequences + low memory → smaller batch
+    - Small sequences + high memory → larger batch
+    - Small datasets → optimize for gradient quality over speed
+    """
+    # Base on available memory and sequence complexity
+    memory_factor = int(max(8, min(48, int(gpu_memory_gb * 4))))
+
+    # Adjust for sequence length
+    if sequence_length > 2000:
+        memory_factor = max(8, memory_factor // 2)
+    elif sequence_length < 200:
+        memory_factor = min(memory_factor * 2, 64)
+
+    # For very small datasets, don't go too large (hurts gradient diversity)
+    if dataset_size < 200:
+        return min(memory_factor, 16)
+
+    return int(memory_factor)

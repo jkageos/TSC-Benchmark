@@ -96,7 +96,7 @@ class Trainer:
             raise RuntimeError(
                 "CUDA is required but not available. "
                 "Please ensure PyTorch with CUDA is installed: "
-                "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118"
+                "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130"
             )
         if device is None:
             self.device = torch.device("cuda")
@@ -148,6 +148,32 @@ class Trainer:
         self.best_epoch = 0
         self.patience_counter = 0
         self.best_model_state: dict[str, Any] | None = None
+
+        # Track training metrics (lightweight)
+        self.train_metrics = MetricsTracker(num_classes, compute_confusion=False)
+
+        # Track validation metrics (full)
+        self.val_metrics = MetricsTracker(num_classes, compute_confusion=True)
+
+        # Optimize dataloaders for repeated iteration
+        if hasattr(train_loader, "num_workers") and train_loader.num_workers > 0:
+            train_loader.persistent_workers = True
+            test_loader.persistent_workers = True
+
+    # Optimize DataLoader creation
+    def _create_optimized_dataloaders(
+        self, train_loader: DataLoader, test_loader: DataLoader
+    ) -> tuple[DataLoader, DataLoader]:
+        """
+        Wrap dataloaders with persistent_workers for speed.
+        Reduces overhead on repeated epoch iterations.
+        """
+        # Only enable if num_workers > 0 to avoid issues with single-process
+        if hasattr(train_loader, "num_workers") and train_loader.num_workers > 0:
+            train_loader.persistent_workers = True
+            test_loader.persistent_workers = True
+
+        return train_loader, test_loader
 
     def train(self) -> dict[str, Any]:
         """
@@ -227,6 +253,12 @@ class Trainer:
         self.metrics_tracker.reset()
         total_loss = 0.0
 
+        # Accumulate gradients to simulate larger batch without memory cost
+        accumulation_steps = 1  # Set to 2-4 if OOM and model is large
+
+        # Convert device to string type for autocast
+        device_type = self.device.type  # "cuda" or "cpu"
+
         for batch_idx, (x, y) in enumerate(tqdm(self.train_loader, desc="Training")):
             x, y = x.to(self.device), y.to(self.device)
 
@@ -236,28 +268,27 @@ class Trainer:
                 x = self.augmentation(x)
                 x = x.squeeze(1)
 
-            self.optimizer.zero_grad()
-
-            # Forward pass with mixed precision
-            device_type = "cuda" if self.device.type == "cuda" else "cpu"
-            if self.use_amp and self.scaler is not None:
-                with torch.autocast(device_type=device_type):
-                    outputs = self.model(x)
-                    loss = self.criterion(outputs, y)
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
+            # Forward pass
+            with torch.autocast(device_type, enabled=self.use_amp):
                 outputs = self.model(x)
-                loss = self.criterion(outputs, y)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
+                loss = self.criterion(outputs, y) / accumulation_steps
 
-            # Metrics
-            total_loss += loss.item()
+            # Backward with proper scaler handling
+            if self.scaler is not None:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
+
+            # Update weights every accumulation_steps
+            if (batch_idx + 1) % accumulation_steps == 0:
+                if self.scaler is not None:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+                self.optimizer.zero_grad()
+
+            total_loss += loss.item() * accumulation_steps
             self.metrics_tracker.update(outputs.detach(), y.detach())
 
         avg_loss = total_loss / len(self.train_loader)
@@ -271,16 +302,21 @@ class Trainer:
         self.metrics_tracker.reset()
         total_loss = 0.0
 
+        # Convert device to string type for autocast
+        device_type = self.device.type  # "cuda" or "cpu"
+
         with torch.no_grad():
             for x, y in tqdm(self.test_loader, desc="Validating"):
                 x, y = x.to(self.device), y.to(self.device)
 
-                if self.use_tta and self.tta is not None:
-                    outputs = self.tta.predict(x)
-                else:
-                    outputs = self.model(x)
+                with torch.autocast(device_type, enabled=self.use_amp):
+                    if self.use_tta and self.tta is not None:
+                        outputs = self.tta.predict(x)
+                    else:
+                        outputs = self.model(x)
 
-                loss = self.criterion(outputs, y)
+                    loss = self.criterion(outputs, y)
+
                 total_loss += loss.item()
                 self.metrics_tracker.update(outputs, y)
 

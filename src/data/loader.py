@@ -2,6 +2,7 @@
 UCR dataset loading and preprocessing with multiprocessing safety.
 """
 
+import pickle
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ from src.utils.system import get_safe_num_workers, recommend_num_workers
 
 class UCRDataLoader:
     """Handles UCR dataset loading and preprocessing."""
+
+    CACHE_DIR = Path("data/cache")
 
     def __init__(
         self,
@@ -150,7 +153,19 @@ class UCRDataLoader:
         Returns:
             Tuple of (X_combined, y_combined) with guaranteed consistent sequence length
         """
+        cache_file = self.CACHE_DIR / f"{self.dataset_name}_combined.pkl"
+
+        # Return cached if exists
+        if cache_file.exists():
+            with open(cache_file, "rb") as f:
+                return pickle.load(f)
+
+        # Load fresh, then cache
         X_train, y_train, X_test, y_test = self.load_data()
+
+        self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(cache_file, "wb") as f:
+            pickle.dump((X_train, y_train, X_test, y_test), f)
 
         # Both X_train and X_test are now guaranteed to have same sequence_length
         # from load_data() method, so safe to combine

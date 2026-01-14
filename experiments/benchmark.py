@@ -18,7 +18,10 @@ from experiments.cross_validate import cross_validate_dataset
 from src.data.loader import UCRDataLoader, load_ucr_dataset
 from src.training.trainer import Trainer
 from src.utils.config import create_model, create_optimizer, load_config
-from src.utils.system import get_system_resources
+from src.utils.system import (
+    get_system_resources,
+    recommend_batch_size,  # ADD THIS IMPORT
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,24 +62,20 @@ def benchmark_model_on_dataset(
     training_config = config.get("training", {})
     dataset_overrides = config.get("dataset_overrides", {}).get(dataset_name, {})
 
-    print(f"\n{'=' * 80}")
-    print(f"Benchmarking {model_name.upper()} on {dataset_name}")
-    print(f"{'=' * 80}\n")
-
-    # Merge dataset-specific overrides
+    # Extract training hyperparameters with dataset overrides
+    epochs = dataset_overrides.get("epochs", training_config.get("epochs", 100))
+    patience = dataset_overrides.get("patience", training_config.get("patience", 15))
     batch_size = dataset_overrides.get("batch_size", training_config["batch_size"])
-    epochs = dataset_overrides.get("epochs", training_config["epochs"])
-    patience = dataset_overrides.get("patience", training_config["patience"])
     max_length = dataset_overrides.get("max_length", training_config.get("max_length"))
 
-    # Get model-specific overrides from dataset config
+    # Extract model-specific overrides
     model_overrides = dataset_overrides.get("models", {}).get(model_name, {})
 
-    # Load dataset
+    # Load dataset first to get sequence info
     try:
         train_loader, test_loader, dataset_info = load_ucr_dataset(
             dataset_name=dataset_name,
-            batch_size=batch_size,
+            batch_size=batch_size,  # Use config default initially
             normalize=training_config["normalize"],
             padding=training_config["padding"],
             max_length=max_length,
@@ -90,14 +89,45 @@ def benchmark_model_on_dataset(
         clear_cuda_memory()
         return {"error": str(e)}
 
+    # **SINGLE optimization point - before deciding CV vs train/test**
+    gpu_memory_gb = resources.get("gpu_memory_total_gb", 6.0)
+    recommended_batch_size = recommend_batch_size(
+        dataset_size=dataset_info["n_train"],
+        sequence_length=dataset_info["sequence_length"],
+        gpu_memory_gb=gpu_memory_gb,
+    )
+
+    # Use recommendation if it differs significantly (≥25% improvement)
+    if recommended_batch_size > batch_size * 1.25:
+        print("⚡ Batch size optimization:")
+        print(f"   Config: {batch_size}, Recommended: {recommended_batch_size}")
+        print(
+            f"   → Using {recommended_batch_size} for {(recommended_batch_size / batch_size - 1) * 100:.0f}% speedup\n"
+        )
+        batch_size = recommended_batch_size
+
+        # Reload dataloaders with optimized batch size
+        train_loader, test_loader, dataset_info = load_ucr_dataset(
+            dataset_name=dataset_name,
+            batch_size=batch_size,
+            normalize=training_config["normalize"],
+            padding=training_config["padding"],
+            max_length=max_length,
+            num_workers=training_config.get("num_workers", 0),
+            max_cpu_load=hardware_config.get("max_cpu_load", 0.5),
+            auto_workers=hardware_config.get("auto_workers", False),
+            max_workers_override=hardware_config.get("max_workers_override"),
+        )
+
     # Print dataset info
     print(f"Dataset: {dataset_name}")
     print(f"  Train samples: {dataset_info['n_train']}")
     print(f"  Test samples: {dataset_info['n_test']}")
     print(f"  Classes: {dataset_info['n_classes']}")
-    print(f"  Sequence length: {dataset_info['sequence_length']}\n")
+    print(f"  Sequence length: {dataset_info['sequence_length']}")
+    print(f"  Batch size: {batch_size}\n")
 
-    # Small dataset → Cross-validation
+    # Small dataset → Cross-validation (with already-optimized batch_size)
     if dataset_info["n_train"] < 300:
         print(f"⚠️  Small dataset ({dataset_info['n_train']} samples) → Using cross-validation\n")
         return benchmark_with_cross_validation(
@@ -105,13 +135,13 @@ def benchmark_model_on_dataset(
             dataset_name=dataset_name,
             config=config,
             dataset_info=dataset_info,
-            batch_size=batch_size,
+            batch_size=batch_size,  # Already optimized!
             epochs=epochs,
             patience=patience,
             model_overrides=model_overrides,
             max_length=max_length,
             k_folds=training_config.get("cv_folds", 5),
-            results_dir=results_dir,  # NEW: Pass results directory
+            results_dir=results_dir,
         )
 
     # Merge base model config with dataset-specific overrides
@@ -155,7 +185,7 @@ def benchmark_model_on_dataset(
         use_amp=hardware_config.get("use_amp", True),
         use_compile=hardware_config.get("use_compile", True),
         compile_mode=hardware_config.get("compile_mode", "default"),
-        use_augmentation=training_config.get("use_augmentation", True),
+        use_augmentation=training_config.get("use_augmentation", False),
         augmentation_params=training_config.get("augmentation_params", {}),
         use_tta=training_config.get("use_tta", False),
         tta_augmentations=training_config.get("tta_augmentations", 5),
@@ -206,7 +236,7 @@ def benchmark_with_cross_validation(
     model_overrides: dict[str, Any],
     max_length: int | None = None,
     k_folds: int = 5,
-    results_dir: Path | None = None,  # NEW: Accept results directory
+    results_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Benchmark with k-fold cross-validation (for small datasets)."""
     loader = UCRDataLoader(
@@ -260,9 +290,11 @@ def benchmark_with_cross_validation(
     criterion = nn.CrossEntropyLoss()
 
     # Create checkpoint directory inside results
-    checkpoint_base_dir = None
+    checkpoint_base_dir: str | None = None
     if config.get("results", {}).get("save_checkpoints", True) and results_dir is not None:
-        checkpoint_base_dir = results_dir / "checkpoints" / "cross_validation" / model_name / dataset_name
+        checkpoint_path = results_dir / "checkpoints" / "cross_validation" / model_name / dataset_name
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
+        checkpoint_base_dir = str(checkpoint_path)
 
     start_time = time.time()
     cv_results = cross_validate_dataset(
@@ -279,7 +311,7 @@ def benchmark_with_cross_validation(
         hardware_config=config.get("hardware", {}),
         training_config=config.get("training", {}),
         save_checkpoints=config.get("results", {}).get("save_checkpoints", True),
-        checkpoint_base_dir=checkpoint_base_dir,  # NEW: Pass checkpoint directory
+        checkpoint_base_dir=checkpoint_base_dir,
     )
     training_time = time.time() - start_time
 

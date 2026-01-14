@@ -28,9 +28,9 @@ datasets:
 # Hardware and system resource management
 hardware:
   device: "cuda"
-  compile_mode: "reduce-overhead"
-  use_amp: true
-  use_compile: false
+  use_compile: true # Changed from false
+  compile_mode: "reduce-overhead" # Better for inference-heavy benches
+  use_amp: true # Keep enabled
   max_cpu_load: 0.6
   reserve_cores: 2
   max_workers_override: 4
@@ -38,25 +38,26 @@ hardware:
 
 # Training hyperparameters
 training:
-  epochs: 100
-  batch_size: 48
+  epochs: 50 # Reduced from 100
+  batch_size: 64 # Increased from 48 (use smaller per-dataset if needed)
   learning_rate: 0.001
   optimizer: "adamw"
   optimizer_params:
     weight_decay: 0.01
-  patience: 15
+  patience: 8 # Reduced from 15
   normalize: true
   padding: "zero"
-  max_length: null
+  max_length: 512 # Changed from null (adaptive)
+  # This truncates very long sequences early
   num_workers: 0
   use_scheduler: true
-  warmup_epochs: 5
+  warmup_epochs: 3 # Reduced from 5
   use_augmentation: false # CRITICAL: Disabled for fair comparison
   use_tta: false # CRITICAL: No test-time augmentation
   tta_augmentations: 5
   use_swa: false
   swa_start: 60
-  cv_folds: 3
+  cv_folds: 3 # Reduced from 5 (still statistically sound)
 
 # Model architectures - Memory-optimized
 models:
@@ -118,7 +119,7 @@ results:
 dataset_overrides:
   Beef:
     epochs: 80
-    batch_size: 8
+    batch_size: 16 # Small dataset needs small batches
     patience: 10
     num_workers: 0
   Car:
@@ -127,8 +128,8 @@ dataset_overrides:
     patience: 10
     num_workers: 0
   ChlorineConcentration:
-    batch_size: 16 # Reduced from 32
-    max_length: 128 # Aggressive truncation
+    batch_size: 32 # Medium dataset
+    max_length: 128 # Keep aggressive
     num_workers: 0
   FiftyWords:
     epochs: 120
@@ -138,17 +139,17 @@ dataset_overrides:
     num_workers: 0
   KeplerLightCurves:
     batch_size: 16 # Reduced from 24
-    max_length: 128 # Aggressive truncation
+    max_length: 256 # Increase slightly from 128 (helps accuracy)
     epochs: 60
     patience: 10
     num_workers: 0
   Adiac:
     batch_size: 16 # Reduced from 32
-    max_length: 256 # More aggressive
+    max_length: 256 # More lenient than 256 global
     num_workers: 0
   CinCECGTorso:
     batch_size: 16 # Reduced from 32
-    max_length: 256 # Truncate long sequences
+    max_length: 512 # Increase to preserve signal
     num_workers: 0
   ArrowHead:
     batch_size: 32

@@ -33,8 +33,7 @@ def cross_validate_dataset(
     hardware_config: dict[str, Any] | None = None,
     training_config: dict[str, Any] | None = None,
     save_checkpoints: bool = True,
-    checkpoint_base_dir: Path | None = None,  # NEW: Accept base directory
-    **trainer_kwargs: Any,
+    checkpoint_base_dir: str | None = None,
 ) -> dict[str, Any]:
     """
     Perform k-fold stratified cross-validation.
@@ -148,7 +147,7 @@ def cross_validate_dataset(
         checkpoint_path: str | None = None
         if save_checkpoints and checkpoint_base_dir is not None:
             # Create checkpoint path inside results directory
-            checkpoint_path = str(checkpoint_base_dir / f"fold_{fold + 1}")
+            checkpoint_path = str(Path(checkpoint_base_dir) / f"fold_{fold + 1}")
 
         trainer = Trainer(
             model=model,
@@ -173,7 +172,6 @@ def cross_validate_dataset(
             swa_start=swa_start,
             checkpoint_dir=checkpoint_path if checkpoint_path else "checkpoints",
             save_checkpoints=save_checkpoints,
-            **trainer_kwargs,
         )
 
         # Train this fold
