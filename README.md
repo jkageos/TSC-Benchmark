@@ -103,6 +103,18 @@ uv run python main.py
 # Set execution.mode = "benchmark" in configs/config.yaml
 ```
 
+### Multiple Benchmark Sessions
+
+Run benchmark repeatedly until interrupted (useful for statistical analysis across runs):
+
+```bash
+uv run python main.py -m
+# or
+uv run python main.py --multiple
+```
+
+Press `Ctrl+C` to stop the loop. Each run creates a new timestamped results directory.
+
 ### Single Model-Dataset Combination
 
 Debug or profile a specific model/dataset pair:
