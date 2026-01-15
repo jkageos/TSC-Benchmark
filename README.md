@@ -509,4 +509,4 @@ uv run python test_cuda.py
 
 ## License
 
-[Add license information if applicable]
+This project is licensed under the MIT License. See the `LICENSE` file for details.
