@@ -68,12 +68,14 @@ class CNN(BaseModel):
 
         self.conv_layers = nn.Sequential(*conv_layers)
 
-        # Calculate flattened dimension after conv layers
-        flattened_dim = num_filters[-1] * current_length
+        # REPLACED: Flattening logic with Global Pooling logic
+        # flattened_dim = num_filters[-1] * current_length  <-- Remove this strict dependency
 
-        # Classification head
+        # Classification head receives 'num_filters[-1]' channels regardless of sequence length
+        self.gap = nn.AdaptiveAvgPool1d(1)
+
         fc_layers: list[nn.Module] = [
-            nn.Linear(flattened_dim, 256),
+            nn.Linear(num_filters[-1], 256),  # Input dim is now just number of filters
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
@@ -95,11 +97,12 @@ class CNN(BaseModel):
         if x.dim() == 2:
             x = x.unsqueeze(1)
 
-        # Conv layers
+        # Conv layers: (B, C_out, L_out)
         x = self.conv_layers(x)
 
-        # Flatten and classify
-        x = x.reshape(x.size(0), -1)
+        # Global Average Pooling: (B, C_out, 1) -> (B, C_out)
+        x = self.gap(x).squeeze(-1)
+
         x = self.fc_layers(x)
 
         return x

@@ -156,53 +156,63 @@ class CrossAttention(nn.Module):
         return self.fc_out(context)
 
 
-class CATSEncoderLayer(nn.Module):
-    """
-    CATS encoder layer combining self-attention and cross-attention.
+class FeedForward(nn.Module):
+    """Point-wise feed-forward network."""
 
-    Architecture:
-    1. Temporal self-attention on input
-    2. Optional cross-attention to auxiliary input
-    3. Feed-forward network
-    Each sublayer has residual connection and layer norm.
-    """
-
-    def __init__(self, d_model: int, num_heads: int = 8, d_ff: int = 2048, dropout: float = 0.1):
+    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
-
-        # Temporal self-attention
-        self.self_attention = MultiHeadSelfAttention(d_model, num_heads, dropout)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-
-        # Cross-attention (optional)
-        self.cross_attention = CrossAttention(d_model, num_heads, dropout)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout2 = nn.Dropout(dropout)
-
-        # Feed-forward network
-        self.feed_forward = nn.Sequential(
+        self.net = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(d_ff, d_model),
         )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class CATSEncoderLayer(nn.Module):
+    """
+    CATS encoder layer combining self-attention and cross-attention.
+
+    Updated to support 'Internal Augmentation' by accepting cross_input.
+    """
+
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float):
+        super().__init__()
+
+        # Use simple self-attention (inputs: x)
+        self.self_attn = MultiHeadSelfAttention(d_model, num_heads, dropout)
+
+        # Use cross-attention (inputs: x, cross_input)
+        self.cross_attn = CrossAttention(d_model, num_heads, dropout)
+
+        self.feed_forward = FeedForward(d_model, d_ff, dropout)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
-        self.dropout3 = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, cross_input: torch.Tensor | None = None) -> torch.Tensor:
-        # Self-attention with residual
-        self_attn_out = self.self_attention(x)
-        x = self.norm1(x + self.dropout1(self_attn_out))
+    def forward(self, x: torch.Tensor, cross_input: torch.Tensor) -> torch.Tensor:
+        # 1. Self Attention
+        residual = x
+        x = self.norm1(x)
+        x = self.self_attn(x)
+        x = residual + self.dropout(x)
 
-        # Cross-attention with residual (if auxiliary input provided)
-        if cross_input is not None:
-            cross_attn_out = self.cross_attention(x, cross_input)
-            x = self.norm2(x + self.dropout2(cross_attn_out))
+        # 2. Cross Attention (attending to auxiliary view)
+        residual = x
+        x = self.norm2(x)
+        x = self.cross_attn(x, cross_input)
+        x = residual + self.dropout(x)
 
-        # Feed-forward with residual
-        ff_out = self.feed_forward(x)
-        x = self.norm3(x + self.dropout3(ff_out))
+        # 3. Feed Forward
+        residual = x
+        x = self.norm3(x)
+        x = self.feed_forward(x)
+        x = residual + self.dropout(x)
 
         return x
 
@@ -211,11 +221,9 @@ class CATS(BaseModel):
     """
     CATS: Cross-Attention and Temporal Self-Attention for Time Series Classification.
 
-    Reference: https://github.com/dongbeank/CATS
-
-    Combines self-attention for temporal modeling with optional cross-attention
-    for multi-view or augmented inputs. Falls back to pure self-attention when
-    cross input is not provided.
+    Benchmarking Mode:
+    Uses 'Self-Cross-Attention' via internal projections to simulate multi-view
+    architecture without external data augmentation.
     """
 
     def __init__(
@@ -233,45 +241,44 @@ class CATS(BaseModel):
     ):
         super().__init__(num_classes)
 
-        # Project input to model dimension
-        self.input_projection = nn.Linear(input_channels, d_model)
-        self.positional_encoding = PositionalEncoding(d_model, max_seq_len)
+        # Two separate input projections to create "views" from the same raw data
+        self.primary_projection = nn.Linear(input_channels, d_model)
+        self.auxiliary_projection = nn.Linear(input_channels, d_model)
 
-        # Stack of CATS encoder layers
+        self.positional_encoding = PositionalEncoding(d_model, max_len=max_seq_len)
+
+        # CATS Encoder Layers
         self.encoder_layers = nn.ModuleList(
             [CATSEncoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)]
         )
 
-        # Classification head with global pooling
+        # Classification Head
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(d_model, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input tensor of shape (batch_size, sequence_length) or
-               (batch_size, n_channels, sequence_length)
-
-        Returns:
-            Logits of shape (batch_size, num_classes)
-        """
-        # Handle input shapes - convert to (batch_size, seq_len, channels)
+        # Ensure (B, T, C) layout
         if x.dim() == 2:
             x = x.unsqueeze(-1)
         elif x.dim() == 3:
             x = x.transpose(1, 2)
 
-        # Project and add positional encoding
-        x = self.input_projection(x)
-        x = self.positional_encoding(x)
+        # 1. Create Primary View
+        x_primary = self.primary_projection(x)
+        x_primary = self.positional_encoding(x_primary)
 
-        # Apply CATS encoder layers (no cross input for now)
+        # 2. Create Auxiliary View (Internal "Augmentation" via projection)
+        x_aux = self.auxiliary_projection(x)
+        x_aux = self.positional_encoding(x_aux)
+
+        # 3. Apply Layers with Cross-Attention between projections
         for layer in self.encoder_layers:
-            x = layer(x, cross_input=None)
+            # Pass our internally generated auxiliary view as 'cross_input'
+            x_primary = layer(x_primary, cross_input=x_aux)
 
-        # Global average pooling + classification
-        x = x.transpose(1, 2)
+        # Global Pooling & Classification
+        x = x_primary.transpose(1, 2)
         x = self.pool(x)
         x = x.squeeze(-1)
         x = self.dropout(x)

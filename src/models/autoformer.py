@@ -18,47 +18,83 @@ from src.models.base import BaseModel
 
 class AutoCorrelation(nn.Module):
     """
-    Auto-correlation mechanism that captures dependencies across time lags.
+    Auto-correlation mechanism with efficient Time Delay Aggregation.
     """
 
     def __init__(self, factor: int = 1):
         super().__init__()
-        self.factor = factor
+        self.factor = factor  # Controls top-k selection (c in paper)
 
     def forward(self, queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         """
-        Auto-correlation attention forward pass.
+        Auto-correlation forward pass.
 
-        Implementation:
-        - FFT-based correlation (O(T log T)) instead of O(T^2) attention
-        - Select top-k lags for sparse aggregation
+        Args:
+            queries: (B, H, L, D)
+            keys:    (B, H, L, D)
+            values:  (B, H, L, D)
         """
-        batch_size, n_heads, seq_len, d_k = queries.shape
+        B, H, L, D = queries.shape
 
-        # Upcast to float32 for FFT stability (mixed precision safe)
-        q32 = queries.float()
-        k32 = keys.float()
+        # 1. Period-based dependencies via FFT
+        # (B, H, L, D) -> (B, H, L//2+1, D)
+        # FIX: Explicitly cast to float32. cuFFT does not support half precision for
+        # non-power-of-two signal sizes, and float32 is better for FFT stability anyway.
+        q_fft = torch.fft.rfft(queries.float(), dim=2)
+        k_fft = torch.fft.rfft(keys.float(), dim=2)
 
-        # Frequency-domain multiply → inverse FFT gives correlation over lags
-        queries_fft = torch.fft.rfft(q32, dim=-2)
-        keys_fft = torch.fft.rfft(k32, dim=-2)
+        # Correlation in frequency domain
+        # Result is (B, H, L, D) after irfft
+        res = q_fft * torch.conj(k_fft)
+        corr = torch.fft.irfft(res, n=L, dim=2)
 
-        corr = queries_fft * torch.conj(keys_fft)
-        corr = torch.fft.irfft(corr, n=seq_len, dim=-2)
+        # 2. Time Delay Aggregation
+        # Aggregating values based on the period (mean over D dim for top-k selection)
+        # corr shape: (B, H, L, D) -> (B, H, L)
+        corr_mean = torch.mean(corr, dim=-1)
 
-        # Top-k lag selection reduces noise and improves efficiency
-        topk = max(1, int(seq_len * self.factor))
-        weights, indices = torch.topk(corr, topk, dim=-2, largest=True, sorted=True)
+        # Select top-k lags
+        # limits k to avoid OOM on very long sequences
+        k = min(int(self.factor * math.log(L)), L)
+        # weights: (B, H, k), delays: (B, H, k)
+        weights, delays = torch.topk(corr_mean, k, dim=-1)
 
-        weights = torch.softmax(weights, dim=-2)
+        # Softmax over selected correlation weights
+        weights = torch.softmax(weights, dim=-1)
 
-        values_expanded = values.unsqueeze(2).expand(-1, -1, topk, -1, -1)
-        gather_idx = indices.unsqueeze(-1).expand(-1, -1, -1, -1, d_k)
-        values_selected = torch.gather(values_expanded, 2, gather_idx)
+        # 3. Efficient Roll (Time Delay)
+        # We need V(t - tau). We calculate indices: (t - tau) % L
 
-        output = torch.sum(weights.unsqueeze(-1) * values_selected, dim=-2)
+        # (1, 1, L, 1)
+        time_indices = torch.arange(L, device=queries.device).reshape(1, 1, L, 1)
 
-        return output.to(queries.dtype)
+        # (B, H, 1, k)
+        delays = delays.unsqueeze(2)
+
+        # Broadcast subtract: (B, H, L, k) -> Indices to gather from V
+        roll_indices = (time_indices - delays) % L
+
+        # Expand indices for gathered values dimensions: (B, H, L, k, D)
+        # We need to gather from 'values' which is (B, H, L, D)
+        # We repeat the gather indices across the D dimension
+        roll_indices = roll_indices.unsqueeze(-1).expand(-1, -1, -1, -1, D)
+
+        # Expand values to accommodate k: (B, H, L, k, D)
+        values_expanded = values.unsqueeze(3).expand(-1, -1, -1, k, -1)
+
+        # Gather elements: For every query pos, we pick k delayed values
+        # (B, H, L, k, D)
+        values_rolled = torch.gather(values_expanded, 2, roll_indices)
+
+        # 4. Weighted Sum
+        # weights: (B, H, k) -> (B, H, 1, k, 1) to broadcast
+        weights = weights.unsqueeze(2).unsqueeze(-1)
+
+        # (B, H, L, D)
+        # Ensure weights match values dtype to maintain mixed precision if active
+        output = torch.sum(values_rolled * weights.to(values_rolled.dtype), dim=3)
+
+        return output
 
 
 class AutoCorrelationMultiHead(nn.Module):
@@ -78,16 +114,21 @@ class AutoCorrelationMultiHead(nn.Module):
         self.auto_corr = AutoCorrelation(factor=factor)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = x.shape[0]
+        batch_size, seq_len, _ = x.shape
 
-        Q = self.query(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        K = self.key(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        V = self.value(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        # Linear projections
+        # (B, L, H, k) -> (B, H, L, k)
+        Q = self.query(x).reshape(batch_size, seq_len, self.num_heads, self.d_k).permute(0, 2, 1, 3)
+        K = self.key(x).reshape(batch_size, seq_len, self.num_heads, self.d_k).permute(0, 2, 1, 3)
+        V = self.value(x).reshape(batch_size, seq_len, self.num_heads, self.d_k).permute(0, 2, 1, 3)
 
+        # Use new AutoCorrelation
         context = self.auto_corr(Q, K, V)
-        context = context.transpose(1, 2).reshape(batch_size, -1, self.d_model)
-        output = self.fc_out(context)
 
+        # Reshape back: (B, H, L, k) -> (B, L, H, k) -> (B, L, D_model)
+        context = context.permute(0, 2, 1, 3).reshape(batch_size, seq_len, self.d_model)
+
+        output = self.fc_out(context)
         return output
 
 

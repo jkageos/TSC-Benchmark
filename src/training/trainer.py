@@ -217,7 +217,6 @@ class Trainer:
             checkpoint_path = self.checkpoint_dir / "best_model.pt"
             try:
                 torch.save(self.best_model_state, checkpoint_path)
-                print(f"✅ Checkpoint saved: {checkpoint_path}")
             except Exception as e:
                 print(f"⚠️  Failed to save checkpoint: {e}")
 
