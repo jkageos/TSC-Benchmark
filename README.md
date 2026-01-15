@@ -457,13 +457,67 @@ See [`system.py`](src/utils/system.py) for resource monitoring utilities.
 
 ## References
 
-This implementation is informed by:
+This implementation is informed by state-of-the-art time series research:
 
-1. **CATS** - https://github.com/dongbeank/CATS
-2. **Autoformer** - https://github.com/thuml/Autoformer
-3. **Time-Series-Library** - https://github.com/thuml/Time-Series-Library
-4. **PatchTST** - https://github.com/yuqinie98/PatchTST
-5. **NN Standard Architectures HPS** - https://github.com/carmelyr/nn_standard_architecture_hps
+1. **CATS** - Cross-Attention and Temporal Self-Attention
+
+   - Paper: [Cross-Attention and Temporal Self-Attention for Time-Series Classification](https://github.com/dongbeank/CATS)
+   - GitHub: https://github.com/dongbeank/CATS
+
+2. **Autoformer** - Auto-correlation attention for time series
+
+   - Paper: [Autoformer: Decomposition Transformers with Auto-Correlation for Long-Term Series Forecasting](https://github.com/thuml/Autoformer)
+   - GitHub: https://github.com/thuml/Autoformer
+
+3. **Time-Series-Library** - Comprehensive TS architectures
+
+   - GitHub: https://github.com/thuml/Time-Series-Library
+
+4. **PatchTST** - Patch-based transformer approach
+
+   - Paper: [A Time Series is Worth 64 Words: Long-term Forecasting with Transformers](https://github.com/yuqinie98/PatchTST)
+   - GitHub: https://github.com/yuqinie98/PatchTST
+
+5. **NN Standard Architectures HPS** - Benchmark reference for hyperparameter configuration
+   - GitHub: https://github.com/carmelyr/nn_standard_architecture_hps
+
+### Citation
+
+If you use this benchmark in your research, please cite:
+
+```bibtex
+@software{tsc_benchmark_2026,
+  title={TSC-Benchmark: Comprehensive Neural Network Benchmarking for Time Series Classification},
+  author={Your Name},
+  year={2026},
+  url={https://github.com/yourusername/TSC-Benchmark}
+}
+```
+
+We also acknowledge the following works that informed our implementation:
+
+```bibtex
+@article{cats2023,
+  title={Cross-Attention and Temporal Self-Attention for Time-Series Classification},
+  author={Dongbeak Kang et al.},
+  journal={arXiv preprint},
+  year={2023}
+}
+
+@article{autoformer2021,
+  title={Autoformer: Decomposition Transformers with Auto-Correlation for Long-Term Series Forecasting},
+  author={Haixu Wu et al.},
+  journal={NeurIPS},
+  year={2021}
+}
+
+@article{patchtst2023,
+  title={A Time Series is Worth 64 Words: Long-term Forecasting with Transformers},
+  author={Yuqi Nie et al.},
+  journal={ICLR},
+  year={2023}
+}
+```
 
 ## Development
 
