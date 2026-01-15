@@ -83,23 +83,21 @@ Four-panel plot analyzing model efficiency:
 - Box plot of accuracy across all datasets per model
 - Shows distribution, median, and outliers
 
-#### Panel 2: Accuracy Distribution by Model
+#### Panel 2: Parameter Efficiency
 
-- Violin plot showing full probability density
-- Reveals bimodal or skewed distributions
+- Scatter plot of accuracy vs. number of parameters (millions)
+- Log scale on X-axis
+- Identifies models that achieve high accuracy with fewer parameters
 
-#### Panel 3: Training Time Efficiency
+#### Panel 3: Memory Efficiency
 
-- Bar chart with error bars (mean ± std)
-- Color-coded by performance (red = slow, green = fast)
+- Scatter plot of accuracy vs. peak GPU memory usage (MB)
+- Highlights models with low memory footprints suitable for constrained environments
 
-#### Panel 4: Performance vs. Training Time
+#### Panel 4: Running Time Efficiency
 
-- Scatter plot with each point = one model-dataset run
-- X-axis: Training time (seconds)
-- Y-axis: Accuracy
-- Color-coded by model
-- Identifies Pareto-optimal models (fast AND accurate)
+- Scatter plot of accuracy vs. total training time (seconds)
+- Identifies models with the best trade-off between speed and accuracy
 
 **Usage**: Efficiency section to discuss computational cost vs. performance tradeoff.
 

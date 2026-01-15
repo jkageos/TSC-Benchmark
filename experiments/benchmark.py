@@ -129,6 +129,11 @@ def benchmark_model_on_dataset(
     # Standard train/test split with auto-capacity reduction
     try:
         aggressive_memory_cleanup()
+
+        # Reset memory stats to track peak usage for this specific model
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
         model = create_model(
             model_name=model_name,
             model_config=adjusted_model_config,
@@ -136,6 +141,10 @@ def benchmark_model_on_dataset(
             input_length=dataset_info["sequence_length"],
             input_channels=1,
         )
+
+        # Calculate parameter count
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
     except RuntimeError as e:
         clear_cuda_memory()
         return {"error": f"Model creation failed: {e}"}
@@ -183,6 +192,11 @@ def benchmark_model_on_dataset(
 
     training_time = time.time() - start_time
 
+    # Capture peak memory
+    peak_memory_mb = 0.0
+    if torch.cuda.is_available():
+        peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+
     best_metrics = history["best_metrics"]
 
     results = {
@@ -194,6 +208,8 @@ def benchmark_model_on_dataset(
         "precision": best_metrics["precision"],
         "recall": best_metrics["recall"],
         "training_time": training_time,
+        "num_params": num_params,
+        "peak_memory_mb": peak_memory_mb,
         "best_epoch": history["best_epoch"],
         "dataset_info": dataset_info,
     }
