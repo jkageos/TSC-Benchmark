@@ -51,6 +51,12 @@ Examples:
         metavar="PATH",
         help="Generate visualizations from results directory or latest run (default: results)",
     )
+    parser.add_argument(
+        "-m",
+        "--multiple",
+        action="store_true",
+        help="Run benchmark mode in a loop until interrupted (Ctrl+C)",
+    )
 
     return parser
 
@@ -86,7 +92,15 @@ def main() -> None:
     if mode == "benchmark":
         from experiments.benchmark import run_benchmark
 
-        run_benchmark(str(config_path))
+        if args.multiple:
+            print("🔁 Multiple benchmark sessions enabled. Press Ctrl+C to stop.")
+            try:
+                while True:
+                    run_benchmark(str(config_path))
+            except KeyboardInterrupt:
+                print("\n⏹️  Stopped multiple benchmark sessions.")
+        else:
+            run_benchmark(str(config_path))
 
     elif mode == "test":
         from experiments.benchmark import benchmark_model_on_dataset

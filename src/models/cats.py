@@ -49,23 +49,39 @@ class MultiHeadSelfAttention(nn.Module):
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
 
+        # Enable Flash Attention on CUDA
+        self.use_flash = torch.cuda.is_available()
+
         # Linear projections for Q, K, V
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
         self.value = nn.Linear(d_model, d_model)
 
+        self.dropout_p = dropout
         self.dropout = nn.Dropout(dropout)
         self.fc_out = nn.Linear(d_model, d_model)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         batch_size = x.shape[0]
 
-        # Multi-head projection: (batch, seq, d_model) → (batch, heads, seq, d_k)
+        # Multi-head projection: (batch, seq, d_model) -> (batch, heads, seq, d_k)
         Q = self.query(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         K = self.key(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = self.value(x).reshape(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        # Scaled dot-product attention
+        # 1. OPTIMIZATION: Use Flash Attention if available (2-4x faster)
+        if self.use_flash:
+            try:
+                context = torch.nn.functional.scaled_dot_product_attention(
+                    Q, K, V, attn_mask=mask, dropout_p=self.dropout_p if self.training else 0.0, is_causal=False
+                )
+                context = context.transpose(1, 2).reshape(batch_size, -1, self.d_model)
+                return self.fc_out(context)
+            except RuntimeError:
+                # Fallback to standard attention if hardware/driver issues occur
+                pass
+
+        # 2. FALLBACK: Manual Scaled dot-product attention
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
 
         if mask is not None:

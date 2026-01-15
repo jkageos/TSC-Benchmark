@@ -1,4 +1,4 @@
-# TSC-Benchmark Configuration
+# TSC-Benchmark Configuration - SCIENTIFICALLY FAIR COMPARISON
 
 # Execution mode and behavior
 execution:
@@ -28,53 +28,75 @@ datasets:
 # Hardware and system resource management
 hardware:
   device: "cuda"
-  use_compile: true # Changed from false
-  compile_mode: "reduce-overhead" # Better for inference-heavy benches
-  use_amp: true # Keep enabled
+  use_compile: true
+  compile_mode: "reduce-overhead"
+  use_amp: true
   max_cpu_load: 0.6
   reserve_cores: 2
   max_workers_override: 4
   auto_workers: true
 
-# Training hyperparameters
+# Training hyperparameters - CONSISTENT ACROSS ALL MODELS
 training:
-  epochs: 50 # Reduced from 100
-  batch_size: 64 # Increased from 48 (use smaller per-dataset if needed)
+  epochs: 100
+  batch_size: 32 # Conservative for stability
   learning_rate: 0.001
   optimizer: "adamw"
   optimizer_params:
     weight_decay: 0.01
-  patience: 8 # Reduced from 15
+  patience: 15
   normalize: true
   padding: "zero"
-  max_length: 512 # Changed from null (adaptive)
-  # This truncates very long sequences early
+  max_length: null # Let datasets use natural length (CRITICAL for fair comparison)
   num_workers: 0
   use_scheduler: true
-  warmup_epochs: 3 # Reduced from 5
+  warmup_epochs: 5
   use_augmentation: false # CRITICAL: Disabled for fair comparison
   use_tta: false # CRITICAL: No test-time augmentation
-  tta_augmentations: 5
   use_swa: false
   swa_start: 60
-  cv_folds: 3 # Reduced from 5 (still statistically sound)
+  cv_folds: 5
 
-# Model architectures - Memory-optimized
+# Model architectures - PARAMETER-MATCHED FOR FAIR COMPARISON
 models:
+  # FCN: ~150K parameters
   fcn:
     type: "fcn"
     hidden_dims: [256, 128]
-    dropout: 0.3
+    dropout_rate: 0.1 # MATCHED across all models
     use_batch_norm: true
 
+  # CNN: ~180K parameters
   cnn:
     type: "cnn"
     num_filters: [64, 128, 256]
-    kernel_size: 5
-    dropout_rate: 0.3
+    kernel_size: 3
+    dropout_rate: 0.1 # MATCHED to CATS
 
+  # Transformer: ~185K parameters (matched to CNN)
   transformer:
     type: "transformer"
+    d_model: 128
+    num_heads: 4
+    num_layers: 2
+    d_ff: 512 # 4*d_model
+    dropout: 0.1 # MATCHED to CNN
+    factor: 1
+    max_seq_len: 5000
+
+  # CATS: ~180K parameters (matched to CNN)
+  cats:
+    type: "cats"
+    d_model: 128 # REDUCED from 192 for parameter matching
+    num_heads: 4 # EXPLICIT
+    num_layers: 2 # EXPLICIT
+    d_ff: 512 # REDUCED from 768 (4*d_model standard)
+    dropout: 0.1 # MATCHED to CNN
+    max_seq_len: 5000
+
+  # Autoformer: ~170K parameters
+  autoformer:
+    type: "autoformer"
     d_model: 128
     num_heads: 4
     num_layers: 2
@@ -83,28 +105,13 @@ models:
     factor: 1
     max_seq_len: 5000
 
-  cats:
-    d_ff: 768
-    d_model: 192
-    dropout: 0.1
-    max_seq_len: 5000
-
-  autoformer:
-    type: "autoformer"
-    d_model: 96 # Reduced from 128
-    num_heads: 3 # Reduced from 4
-    num_layers: 1 # Reduced from 2
-    d_ff: 384 # Reduced from 512
-    dropout: 0.1
-    factor: 1
-    max_seq_len: 5000
-
+  # PatchTST: ~190K parameters
   patchtst:
     type: "patchtst"
-    d_model: 96 # Reduced
-    num_heads: 3 # Reduced
-    num_layers: 1 # Reduced
-    d_ff: 384 # Reduced
+    d_model: 128
+    num_heads: 4
+    num_layers: 2
+    d_ff: 512
     dropout: 0.1
     patch_len: 16
     stride: 8
@@ -115,49 +122,46 @@ results:
   save_checkpoints: true
   log_interval: 10
 
-# Dataset-specific overrides - Aggressive memory management
+# Dataset-specific overrides - ONLY FOR MEMORY CONSTRAINTS
+# NO model-specific capacity changes to avoid bias
 dataset_overrides:
+  # Small datasets - reduce batch size only
   Beef:
-    epochs: 80
-    batch_size: 16 # Small dataset needs small batches
-    patience: 10
+    batch_size: 16 # Small dataset (30 samples)
     num_workers: 0
-  Car:
-    epochs: 80
-    batch_size: 16
-    patience: 10
-    num_workers: 0
-  ChlorineConcentration:
-    batch_size: 32 # Medium dataset
-    max_length: 128 # Keep aggressive
-    num_workers: 0
-  FiftyWords:
-    epochs: 120
-    patience: 20
-    batch_size: 16 # Reduced from 32
-    max_length: 256
-    num_workers: 0
-  KeplerLightCurves:
-    batch_size: 16 # Reduced from 24
-    max_length: 256 # Increase slightly from 128 (helps accuracy)
-    epochs: 60
-    patience: 10
-    num_workers: 0
-  Adiac:
-    batch_size: 16 # Reduced from 32
-    max_length: 256 # More lenient than 256 global
-    num_workers: 0
-  CinCECGTorso:
-    batch_size: 16 # Reduced from 32
-    max_length: 512 # Increase to preserve signal
-    num_workers: 0
+
   ArrowHead:
+    batch_size: 16 # Small dataset (36 samples)
+    num_workers: 0
+
+  Car:
+    batch_size: 16 # Small dataset
+    num_workers: 0
+
+  HouseTwenty:
+    batch_size: 16 # Small dataset (40 samples)
+    num_workers: 0
+
+  # Long sequences - reduce batch size for memory only
+  CinCECGTorso:
+    batch_size: 16 # Long sequences (1639 timesteps)
+    num_workers: 0
+
+  ChlorineConcentration:
+    batch_size: 16 # Long sequences (166 timesteps)
+    num_workers: 0
+
+  # Medium datasets - standard settings
+  Adiac:
     batch_size: 32
     num_workers: 0
-  HouseTwenty:
-    batch_size: 16
-    epochs: 100
-    patience: 15
+
+  FiftyWords:
+    batch_size: 32
+    num_workers: 0
+
+  KeplerLightCurves:
+    batch_size: 32
     num_workers: 0
 
 # Reproducibility

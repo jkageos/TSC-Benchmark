@@ -91,6 +91,173 @@ def get_system_resources() -> dict[str, Any]:
     return resources
 
 
+def get_gpu_memory_gb() -> float:
+    """Get total GPU memory in GB."""
+    if torch.cuda.is_available():
+        return torch.cuda.get_device_properties(0).total_memory / 1e9
+    return 0.0
+
+
+def clear_cuda_memory() -> None:
+    """Aggressively clear CUDA cache and Python garbage collection."""
+    import gc
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    gc.collect()
+
+
+def aggressive_memory_cleanup() -> None:
+    """Perform aggressive memory cleanup before model creation."""
+    clear_cuda_memory()
+    if torch.cuda.is_available() and platform.system() != "Windows":
+        # Force garbage collection (Linux/Mac only - not available on Windows)
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            pass  # Silently skip if not available
+
+
+def estimate_model_memory_gb(
+    model_name: str,
+    d_model: int,
+    num_layers: int,
+    sequence_length: int,
+    batch_size: int,
+) -> float:
+    """
+    Estimate GPU memory needed for model + activations (rough estimate).
+
+    Args:
+        model_name: Name of model
+        d_model: Model dimension
+        num_layers: Number of layers
+        sequence_length: Sequence length
+        batch_size: Batch size
+
+    Returns:
+        Estimated memory in GB
+    """
+    # Model parameters (float32 = 4 bytes per param)
+    if model_name in ("transformer", "cats", "autoformer", "patchtst"):
+        # Transformer: ~d_model * seq_len * num_layers parameters + embeddings
+        param_memory = (d_model * sequence_length * num_layers * 4) / 1e9
+    elif model_name == "cnn":
+        # CNN: ~filters * kernel_size * layers
+        param_memory = (64 * 128 * 256 * 9 * 4) / 1e9  # rough estimate
+    else:  # fcn
+        param_memory = (256 * 128 * 4) / 1e9
+
+    # Activation memory (batch_size * seq_len * d_model * num_layers)
+    activation_memory = (batch_size * sequence_length * d_model * num_layers * 4) / 1e9
+
+    # Optimizer state (Adam: 2x parameters for momentum + variance)
+    optimizer_memory = param_memory * 2
+
+    # Total with safety margin (1.3x)
+    total = (param_memory + activation_memory + optimizer_memory) * 1.3
+
+    return total
+
+
+def adjust_hyperparameters_for_memory(
+    dataset_name: str,
+    dataset_info: dict[str, Any],
+    batch_size: int,
+    model_name: str,
+    model_config: dict[str, Any],
+    gpu_memory_gb: float,
+) -> tuple[int, int, dict[str, Any]]:
+    """
+    Dynamically adjust batch size, sequence length, and model config based on GPU memory.
+
+    Returns:
+        (adjusted_batch_size, adjusted_max_length, adjusted_model_config)
+    """
+    seq_length = dataset_info["sequence_length"]
+    dataset_size = dataset_info["n_train"]
+    adjusted_config = model_config.copy()
+    adjusted_max_length = seq_length
+    adjusted_batch_size = batch_size
+
+    # Available memory (reserve 1GB for safety)
+    available_memory = max(0.5, gpu_memory_gb - 1.0)
+
+    # Estimate memory for current config
+    d_model = adjusted_config.get("d_model", 128)
+    num_layers = adjusted_config.get("num_layers", 2)
+    estimated_memory = estimate_model_memory_gb(model_name, d_model, num_layers, seq_length, batch_size)
+
+    # Strategy 1: If memory estimate exceeds available, reduce aggressively
+    if estimated_memory > available_memory:
+        reduction_needed = estimated_memory / available_memory
+
+        # First: truncate sequence length
+        if seq_length > 256:
+            target_seq_length = max(128, int(seq_length / (reduction_needed**0.4)))
+            adjusted_max_length = target_seq_length
+            estimated_memory = estimate_model_memory_gb(model_name, d_model, num_layers, target_seq_length, batch_size)
+
+        # Second: reduce batch size
+        if estimated_memory > available_memory and batch_size > 4:
+            target_batch = max(4, int(batch_size / (estimated_memory / available_memory)))
+            adjusted_batch_size = target_batch
+            estimated_memory = estimate_model_memory_gb(
+                model_name, d_model, num_layers, adjusted_max_length, target_batch
+            )
+
+        # Third: reduce model capacity
+        if estimated_memory > available_memory:
+            reduction_factor = available_memory / estimated_memory
+
+            if "d_model" in adjusted_config:
+                adjusted_config["d_model"] = max(64, int(d_model * reduction_factor))
+
+            if "d_ff" in adjusted_config:
+                adjusted_config["d_ff"] = max(256, int(adjusted_config.get("d_ff", 512) * reduction_factor))
+
+            if "num_layers" in adjusted_config:
+                adjusted_config["num_layers"] = max(1, int(num_layers * reduction_factor))
+
+            if "num_heads" in adjusted_config:
+                old_heads = adjusted_config["num_heads"]
+                new_heads = max(1, int(old_heads * reduction_factor))
+                # Ensure d_model is divisible by num_heads
+                adjusted_d_model = adjusted_config["d_model"]
+                while new_heads > 0 and adjusted_d_model % new_heads != 0:
+                    new_heads -= 1
+                adjusted_config["num_heads"] = max(1, new_heads)
+
+            if "num_filters" in adjusted_config and isinstance(adjusted_config["num_filters"], list):
+                adjusted_config["num_filters"] = [
+                    max(16, int(f * reduction_factor)) for f in adjusted_config["num_filters"]
+                ]
+
+            if "hidden_dims" in adjusted_config and isinstance(adjusted_config["hidden_dims"], list):
+                adjusted_config["hidden_dims"] = [
+                    max(64, int(d * reduction_factor)) for d in adjusted_config["hidden_dims"]
+                ]
+
+    # KeplerLightCurves specific: very aggressive truncation
+    if dataset_name == "KeplerLightCurves" and seq_length == 512:
+        adjusted_max_length = min(adjusted_max_length, 256)
+        adjusted_batch_size = min(adjusted_batch_size, 8)
+
+    # Long sequence datasets
+    elif seq_length > 1000:
+        adjusted_max_length = min(adjusted_max_length, 512)
+        adjusted_batch_size = min(adjusted_batch_size, batch_size // 2)
+
+    # Small dataset: optimize for gradient quality
+    elif dataset_size < 100:
+        adjusted_batch_size = min(adjusted_batch_size, 16)
+
+    return adjusted_batch_size, adjusted_max_length, adjusted_config
+
+
 def recommend_num_workers(
     batch_size: int,
     sequence_length: int,

@@ -2,7 +2,6 @@
 K-fold stratified cross-validation for small datasets.
 """
 
-import gc
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from torch.utils.data import DataLoader
 
 from src.data.loader import TimeSeriesDataset
 from src.training.trainer import Trainer
-from src.utils.system import get_safe_num_workers
+from src.utils.system import clear_cuda_memory, get_safe_num_workers
 
 
 def cross_validate_dataset(
@@ -28,24 +27,32 @@ def cross_validate_dataset(
     num_classes: int,
     k_folds: int = 5,
     batch_size: int = 32,
-    epochs: int = 50,
-    patience: int = 10,
+    epochs: int = 100,
+    patience: int = 15,
     hardware_config: dict[str, Any] | None = None,
     training_config: dict[str, Any] | None = None,
     save_checkpoints: bool = True,
     checkpoint_base_dir: str | None = None,
 ) -> dict[str, Any]:
     """
-    Perform k-fold stratified cross-validation.
+    Perform k-fold cross-validation on a dataset.
 
-    CRITICAL: Verifies consistent sequence length before CV split
+    Returns:
+        Dictionary with mean/std metrics across folds, including:
+        - mean_accuracy, std_accuracy
+        - mean_f1_macro, std_f1_macro
+        - mean_f1_weighted, std_f1_weighted
+        - mean_precision, std_precision
+        - mean_recall, std_recall
     """
-    # Default configs
-    hardware_config = hardware_config or {}
-    training_config = training_config or {}
+    if hardware_config is None:
+        hardware_config = {}
+    if training_config is None:
+        training_config = {}
 
-    # Extract hardware settings
-    device = hardware_config.get("device", "cuda")
+    device_name = hardware_config.get("device", "cuda")
+    device = torch.device(device_name if torch.cuda.is_available() else "cpu")
+
     use_compile = hardware_config.get("use_compile", True)
     compile_mode = hardware_config.get("compile_mode", "default")
     use_amp = hardware_config.get("use_amp", True)
@@ -72,7 +79,7 @@ def cross_validate_dataset(
         ),
     )
 
-    # REMOVED: Dataset shape verification print (silent validation)
+    # Validate input shape
     if X.ndim != 2:
         raise ValueError(f"Expected 2D input (batch, seq_len), got shape {X.shape}")
 
@@ -84,19 +91,18 @@ def cross_validate_dataset(
     skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
 
     fold_accuracies: list[float] = []
-    fold_f1_scores: list[float] = []
+    fold_f1_macro: list[float] = []
+    fold_f1_weighted: list[float] = []
+    fold_precision: list[float] = []
+    fold_recall: list[float] = []
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
-        # REMOVED: Fold header print (silent training)
-
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
 
         # Verify shapes are consistent
         assert X_train.shape[1] == expected_length
         assert X_val.shape[1] == expected_length
-
-        # REMOVED: Sample count print
 
         # Create datasets and loaders
         train_dataset = TimeSeriesDataset(X_train, y_train)
@@ -128,18 +134,21 @@ def cross_validate_dataset(
             model = model_fn()
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                # Skip this fold silently
                 fold_accuracies.append(0.0)
-                fold_f1_scores.append(0.0)
+                fold_f1_macro.append(0.0)
+                fold_f1_weighted.append(0.0)
+                fold_precision.append(0.0)
+                fold_recall.append(0.0)
+                clear_cuda_memory()  # Use centralized memory cleanup
                 continue
             raise
 
         optimizer = optimizer_fn(model)
 
-        # Trainer setup
-        checkpoint_path: str | None = None
+        # Handle checkpoint directory
+        checkpoint_dir: str | Path = "checkpoints"
         if save_checkpoints and checkpoint_base_dir is not None:
-            checkpoint_path = str(Path(checkpoint_base_dir) / f"fold_{fold + 1}")
+            checkpoint_dir = str(Path(checkpoint_base_dir) / f"fold_{fold + 1}")
 
         trainer = Trainer(
             model=model,
@@ -149,9 +158,8 @@ def cross_validate_dataset(
             criterion=criterion,
             num_classes=num_classes,
             epochs=epochs,
+            device=device.type,  # Pass device.type (str) not device object
             patience=patience,
-            device=device,
-            checkpoint_dir=checkpoint_path or "checkpoints",
             use_scheduler=use_scheduler,
             warmup_epochs=warmup_epochs,
             use_amp=use_amp,
@@ -164,6 +172,7 @@ def cross_validate_dataset(
             use_swa=use_swa,
             swa_start=swa_start,
             save_checkpoints=save_checkpoints,
+            checkpoint_dir=checkpoint_dir,
         )
 
         try:
@@ -172,36 +181,57 @@ def cross_validate_dataset(
             if "out of memory" in str(e).lower():
                 # Skip this fold silently
                 fold_accuracies.append(0.0)
-                fold_f1_scores.append(0.0)
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                gc.collect()
+                fold_f1_macro.append(0.0)
+                fold_f1_weighted.append(0.0)
+                fold_precision.append(0.0)
+                fold_recall.append(0.0)
+                clear_cuda_memory()  # Use centralized memory cleanup
                 continue
             raise
 
-        # Record metrics
+        # Record ALL metrics
         best_metrics = history["best_metrics"]
         fold_accuracies.append(best_metrics["accuracy"])
-        fold_f1_scores.append(best_metrics["f1_macro"])
+        fold_f1_macro.append(best_metrics["f1_macro"])
+        fold_f1_weighted.append(best_metrics["f1_weighted"])
+        fold_precision.append(best_metrics["precision"])
+        fold_recall.append(best_metrics["recall"])
 
-        # REMOVED: Fold results print (silent)
+        # Clean up after each fold
+        clear_cuda_memory()
 
-    # Aggregate results
+    # Aggregate results with ALL metrics
     if fold_accuracies:
         mean_acc = float(np.mean(fold_accuracies))
         std_acc = float(np.std(fold_accuracies))
-        mean_f1 = float(np.mean(fold_f1_scores))
-        std_f1 = float(np.std(fold_f1_scores))
+        mean_f1_macro = float(np.mean(fold_f1_macro))
+        std_f1_macro = float(np.std(fold_f1_macro))
+        mean_f1_weighted = float(np.mean(fold_f1_weighted))
+        std_f1_weighted = float(np.std(fold_f1_weighted))
+        mean_precision = float(np.mean(fold_precision))
+        std_precision = float(np.std(fold_precision))
+        mean_recall = float(np.mean(fold_recall))
+        std_recall = float(np.std(fold_recall))
     else:
-        mean_acc = std_acc = mean_f1 = std_f1 = 0.0
-
-    # REMOVED: Summary print (handled by benchmark progress bar)
+        mean_acc = std_acc = mean_f1_macro = std_f1_macro = 0.0
+        mean_f1_weighted = std_f1_weighted = 0.0
+        mean_precision = std_precision = 0.0
+        mean_recall = std_recall = 0.0
 
     return {
         "mean_accuracy": mean_acc,
         "std_accuracy": std_acc,
-        "mean_f1_macro": mean_f1,
-        "std_f1_macro": std_f1,
+        "mean_f1_macro": mean_f1_macro,
+        "std_f1_macro": std_f1_macro,
+        "mean_f1_weighted": mean_f1_weighted,
+        "std_f1_weighted": std_f1_weighted,
+        "mean_precision": mean_precision,
+        "std_precision": std_precision,
+        "mean_recall": mean_recall,
+        "std_recall": std_recall,
         "fold_accuracies": fold_accuracies,
-        "fold_f1_scores": fold_f1_scores,
+        "fold_f1_macro": fold_f1_macro,
+        "fold_f1_weighted": fold_f1_weighted,
+        "fold_precision": fold_precision,
+        "fold_recall": fold_recall,
     }

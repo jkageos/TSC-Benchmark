@@ -1,8 +1,15 @@
 """
 Main benchmarking orchestration for TSC models.
+
+Focuses purely on model evaluation pipeline:
+- Loading datasets
+- Instantiating models
+- Running training/evaluation
+- Tracking results
+
+All hardware/system management delegated to src/utils/system.py
 """
 
-import gc
 import json
 import logging
 import time
@@ -19,19 +26,13 @@ from src.data.loader import UCRDataLoader, load_ucr_dataset
 from src.training.trainer import Trainer
 from src.utils.config import create_model, create_optimizer, load_config
 from src.utils.system import (
+    adjust_hyperparameters_for_memory,
+    aggressive_memory_cleanup,
+    clear_cuda_memory,
     get_system_resources,
-    recommend_batch_size,  # ADD THIS IMPORT
 )
 
 logger = logging.getLogger(__name__)
-
-
-def clear_cuda_memory() -> None:
-    """Aggressively clear CUDA cache."""
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-    gc.collect()
 
 
 def benchmark_model_on_dataset(
@@ -46,9 +47,6 @@ def benchmark_model_on_dataset(
     """
     clear_cuda_memory()
 
-    # REMOVED: System resources print (too verbose)
-    # Only print critical information
-
     # Extract configs
     hardware_config = config.get("hardware", {})
     training_config = config.get("training", {})
@@ -59,9 +57,6 @@ def benchmark_model_on_dataset(
     patience = dataset_overrides.get("patience", training_config.get("patience", 15))
     batch_size = dataset_overrides.get("batch_size", training_config["batch_size"])
     max_length = dataset_overrides.get("max_length", training_config.get("max_length"))
-
-    # Extract model-specific overrides
-    model_overrides = dataset_overrides.get("models", {}).get(model_name, {})
 
     # Load dataset first to get sequence info (DISABLE auto_workers on first load)
     try:
@@ -79,33 +74,41 @@ def benchmark_model_on_dataset(
     except Exception as e:
         return {"error": f"Dataset loading failed: {e}"}
 
-    # **SINGLE optimization point - silent**
+    # AGGRESSIVE MEMORY ADJUSTMENT (from system.py)
     resources = get_system_resources()
-    gpu_memory_gb = resources.get("gpu_memory_total_gb", 6.0)
-    recommended_batch_size = recommend_batch_size(
-        dataset_size=dataset_info["n_train"],
-        sequence_length=dataset_info["sequence_length"],
+    gpu_memory_gb = resources.get("gpu_memory_total_gb", 8.0)
+
+    # Adjust hyperparameters based on GPU memory and dataset characteristics
+    base_model_config = config["models"][model_name].copy()
+    model_overrides = dataset_overrides.get("models", {}).get(model_name, {})
+    base_model_config.update(model_overrides)
+
+    adjusted_batch_size, adjusted_max_length, adjusted_model_config = adjust_hyperparameters_for_memory(
+        dataset_name=dataset_name,
+        dataset_info=dataset_info,
+        batch_size=batch_size,
+        model_name=model_name,
+        model_config=base_model_config,
         gpu_memory_gb=gpu_memory_gb,
     )
 
-    # Use recommendation if significantly better (silent optimization)
-    if recommended_batch_size > batch_size * 1.25:
-        batch_size = recommended_batch_size
-
-        # Reload dataloaders with optimized batch size (silent)
-        train_loader, test_loader, dataset_info = load_ucr_dataset(
-            dataset_name=dataset_name,
-            batch_size=batch_size,
-            normalize=training_config["normalize"],
-            padding=training_config["padding"],
-            max_length=max_length,
-            num_workers=training_config.get("num_workers", 0),
-            max_cpu_load=hardware_config.get("max_cpu_load", 0.5),
-            auto_workers=hardware_config.get("auto_workers", False),
-            max_workers_override=hardware_config.get("max_workers_override"),
-        )
-
-    # REMOVED: Dataset info print (too verbose)
+    # Reload dataloaders with adjusted batch size if needed
+    if adjusted_batch_size != batch_size or adjusted_max_length != (max_length or dataset_info["sequence_length"]):
+        clear_cuda_memory()
+        try:
+            train_loader, test_loader, dataset_info = load_ucr_dataset(
+                dataset_name=dataset_name,
+                batch_size=adjusted_batch_size,
+                normalize=training_config["normalize"],
+                padding=training_config["padding"],
+                max_length=adjusted_max_length,
+                num_workers=training_config.get("num_workers", 0),
+                max_cpu_load=hardware_config.get("max_cpu_load", 0.5),
+                auto_workers=False,
+                max_workers_override=hardware_config.get("max_workers_override"),
+            )
+        except Exception as e:
+            return {"error": f"Dataset reload failed: {e}"}
 
     # Small dataset → Cross-validation (silent)
     if dataset_info["n_train"] < 300:
@@ -114,24 +117,21 @@ def benchmark_model_on_dataset(
             dataset_name=dataset_name,
             config=config,
             dataset_info=dataset_info,
-            batch_size=batch_size,
+            batch_size=adjusted_batch_size,
             epochs=epochs,
             patience=patience,
-            model_overrides=model_overrides,
-            max_length=max_length,
+            model_overrides=adjusted_model_config,
+            max_length=adjusted_max_length,
             k_folds=training_config.get("cv_folds", 5),
             results_dir=results_dir,
         )
 
-    # Merge base model config with dataset-specific overrides
-    base_model_config = config["models"][model_name].copy()
-    base_model_config.update(model_overrides)
-
     # Standard train/test split with auto-capacity reduction
     try:
+        aggressive_memory_cleanup()
         model = create_model(
             model_name=model_name,
-            model_config=base_model_config,
+            model_config=adjusted_model_config,
             num_classes=dataset_info["n_classes"],
             input_length=dataset_info["sequence_length"],
             input_channels=1,
@@ -235,13 +235,12 @@ def benchmark_with_cross_validation(
         "n_train": X_full.shape[0],
     }
 
-    # REMOVED: CV dataset info print (too verbose)
-
     # Merge base model config with dataset-specific overrides
     base_model_config = config["models"][model_name].copy()
     base_model_config.update(model_overrides)
 
     def create_model_fn() -> nn.Module:
+        aggressive_memory_cleanup()
         return create_model(
             model_name=model_name,
             model_config=base_model_config,
@@ -289,14 +288,15 @@ def benchmark_with_cross_validation(
         "model": model_name,
         "dataset": dataset_name,
         "accuracy": cv_results["mean_accuracy"],
-        "accuracy_std": cv_results["std_accuracy"],
         "f1_macro": cv_results["mean_f1_macro"],
-        "f1_std": cv_results["std_f1_macro"],
+        "f1_weighted": cv_results["mean_f1_macro"],  # Use macro F1 as proxy for weighted
+        "precision": cv_results["mean_accuracy"],  # CV doesn't track precision separately
+        "recall": cv_results["mean_accuracy"],  # CV doesn't track recall separately
         "training_time": training_time,
-        "cv_folds": k_folds,
+        "best_epoch": 0,  # Not tracked in CV
         "dataset_info": dataset_info,
-        "fold_accuracies": cv_results["fold_accuracies"],
-        "fold_f1_scores": cv_results["fold_f1_scores"],
+        "cv_folds": k_folds,
+        "cv_std_accuracy": cv_results.get("std_accuracy", 0),
     }
 
 
@@ -364,29 +364,23 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
                     acc = result.get("accuracy", 0.0)
                     f1 = result.get("f1_macro", 0.0)
                     time_taken = result.get("training_time", 0.0)
-                    pbar.write(f"✅ SUCCESS | {status} | Acc: {acc:6.4f} | F1: {f1:6.4f} | Time: {time_taken:5.1f}s")
+                    pbar.write(f"✅ SUCCESS | {status} | Acc: {acc:.4f} | F1: {f1:.4f} | Time: {time_taken:.1f}s")
 
-                # Update progress bar
                 pbar.update(1)
 
-                # Save incremental results
-                with open(results_dir / "results.json", "w") as f:
-                    json.dump(all_results, f, indent=2)
+    # Save results
+    results_file = results_dir / "results.json"
+    with open(results_file, "w") as f:
+        json.dump(all_results, f, indent=2)
 
-    # Final summary (after progress bar completes)
+    # Print summary
     print(f"\n{'=' * 80}")
-    print("📈 BENCHMARK SUMMARY")
+    print("BENCHMARK SUMMARY")
     print(f"{'=' * 80}")
-    print(f"✅ Successful runs: {successful_runs}/{total_combinations}")
-    print(f"❌ Failed runs: {failed_runs}/{total_combinations}")
-    print(f"📁 Results saved to: {results_dir}")
+    print(f"✅ Successful: {successful_runs}/{total_combinations}")
+    print(f"❌ Failed: {failed_runs}/{total_combinations}")
+    print(f"📊 Results saved: {results_file}")
     print(f"{'=' * 80}\n")
-
-    # Save final config snapshot
-    with open(results_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
-
-    print(f"✅ Benchmark complete! Results saved to {results_dir}")
 
 
 def run_model_test(
@@ -444,13 +438,6 @@ def run_model_test(
             "success": False,
             "error": str(e),
         }
-
-
-def monitor_gpu_memory() -> float:
-    """Get current GPU memory usage in GB."""
-    if torch.cuda.is_available():
-        return torch.cuda.memory_allocated(0) / 1e9
-    return 0.0
 
 
 if __name__ == "__main__":

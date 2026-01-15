@@ -72,7 +72,7 @@ class MultiHeadAttention(nn.Module):
         self.d_k = d_model // num_heads
 
         # Enable SDPA on CUDA; falls back to standard attention otherwise
-        self.use_flash = False  # Disabled for reproducibility
+        self.use_flash = True  # Change False to True
 
         self.query = nn.Linear(d_model, d_model)
         self.key = nn.Linear(d_model, d_model)
@@ -181,20 +181,32 @@ class PatchTST(BaseModel):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: (B, T) or (B, C, T), normalized to (B, T, C)
+            x: (B, T) or (B, C, T)
         """
-        # Patching → prepend class token → add positional encoding
-        if x.dim() == 2:
-            x = x.unsqueeze(-1)
-        elif x.dim() == 3:
-            x = x.transpose(1, 2)
+        # Store original batch size
+        B = x.shape[0]
+        C = x.shape[1] if x.dim() == 3 else 1
 
+        # 1. CHANNEL INDEPENDENCE: Reshape (B, C, T) -> (B*C, T, 1)
+        # This treats every channel as a separate independent time series
+        if x.dim() == 3:
+            # Reshape to (B*C, T) then add trivial channel dim -> (B*C, T, 1)
+            x = x.reshape(B * C, -1).unsqueeze(-1)
+        else:
+            # Univariate case: (B, T) -> (B, T, 1)
+            x = x.unsqueeze(-1)
+
+        # Patching → prepend class token → add positional encoding
+        # Input to PatchEmbedding MUST be (Batch, SeqLen, Channels)
         x = self.patch_embedding(x)
 
         batch_size = x.shape[0]
+
+        # Add class token
         class_tokens = self.class_token.expand(batch_size, -1, -1)
         x = torch.cat([class_tokens, x], dim=1)
 
+        # Add positional encoding
         x = x + self.positional_encoding[:, : x.size(1), :]
 
         for block in self.transformer_blocks:
@@ -203,6 +215,11 @@ class PatchTST(BaseModel):
         # Use class token as sequence summary for logits
         x = x[:, 0, :]
         x = self.dropout(x)
-        x = self.classifier(x)
+        x = self.classifier(x)  # Output shape is (B*C, num_classes)
+
+        # 2. OUTPUT AGGREGATION: Reshape back to (B, C, Classes) and pool
+        if C > 1:
+            x = x.reshape(B, C, -1)  # Restore batches and channels
+            x = x.mean(dim=1)  # Average pooling across channels (Voting)
 
         return x
