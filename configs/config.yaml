@@ -119,8 +119,7 @@ models:
 # Results and logging
 results:
   save_dir: "results"
-  save_checkpoints: true
-  log_interval: 10
+  save_checkpoints: false
 
 # Dataset-specific overrides - ONLY FOR MEMORY CONSTRAINTS
 # NO model-specific capacity changes to avoid bias

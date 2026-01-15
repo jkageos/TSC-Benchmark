@@ -145,8 +145,6 @@ TSC-Benchmark/
 │
 ├── configs/
 │   ├── config.yaml                  # Main configuration (hyperparameters, datasets, models)
-│   ├── config.backup.yaml           # Backup of original config
-│   └── config_test.yaml             # Testing configuration
 │
 ├── src/
 │   ├── models/                      # Model implementations
@@ -179,13 +177,30 @@ TSC-Benchmark/
 │   └── __init__.py
 │
 ├── results/                         # Benchmark results and logs
+│   ├── .gitkeep
+│   ├── visualizations_combined/     # Combined visualizations from all runs (on-demand)
+│   │   ├── 01_dataset_table.png
+│   │   ├── 02_heatmap_max_accuracy.png
+│   │   ├── 03_heatmap_avg_accuracy.png
+│   │   ├── 04_efficiency_analysis.png
+│   │   ├── 05_model_comparison_table.png
+│   │   └── 06_dataset_performance_table.png
 │   └── YYYYMMDD_HHMMSS/             # Timestamped result directories
 │       ├── results.json             # Per-model accuracy and metrics
 │       ├── summary.json             # Aggregated summary by dataset/model
 │       ├── config.json              # Config snapshot for reproducibility
+│       ├── visualizations/          # Generated plots (single run, on-demand)
+│       │   ├── 01_dataset_table.png
+│       │   ├── 02_heatmap_max_accuracy.png
+│       │   ├── 03_heatmap_avg_accuracy.png
+│       │   ├── 04_efficiency_analysis.png
+│       │   ├── 05_model_comparison_table.png
+│       │   └── 06_dataset_performance_table.png
 │       └── checkpoints/             # Model weights
 │           ├── {model_name}/        # Standard train/test checkpoints
 │           │   └── {dataset_name}/
+│           │       ├── best_model.pt
+│           │       └── latest.pt
 │           └── cross_validation/    # Cross-validation checkpoints
 │               └── {model_name}/
 │                   └── {dataset_name}/
@@ -506,6 +521,10 @@ uv run python test_cuda.py
 - Tune `learning_rate` and `warmup_epochs`
 - Enable `use_augmentation: true`
 - Increase model capacity (`d_model`, `num_layers`, etc.)
+
+## Generate Visualizations
+
+See [VISUALIZATIONS.md](VISUALIZATIONS.md) for detailed visualization guide.
 
 ## License
 

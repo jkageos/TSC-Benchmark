@@ -373,6 +373,11 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
     with open(results_file, "w") as f:
         json.dump(all_results, f, indent=2)
 
+    # Save config snapshot for reproducibility
+    config_file = results_dir / "config.json"
+    with open(config_file, "w") as f:
+        json.dump(config, f, indent=2)
+
     # Print summary
     print(f"\n{'=' * 80}")
     print("BENCHMARK SUMMARY")
@@ -380,6 +385,7 @@ def run_benchmark(config_path: str = "configs/config.yaml") -> None:
     print(f"✅ Successful: {successful_runs}/{total_combinations}")
     print(f"❌ Failed: {failed_runs}/{total_combinations}")
     print(f"📊 Results saved: {results_file}")
+    print(f"📋 Config saved: {config_file}")
     print(f"{'=' * 80}\n")
 
 
