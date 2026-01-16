@@ -11,6 +11,7 @@ All behavior controlled via configs/config.yaml
 
 Command-line flags:
 - -p, --plot [PATH]: Generate visualizations from results directory or latest run
+- -m, --multiple: Run benchmark mode repeatedly until interrupted (Ctrl+C)
 """
 
 import argparse

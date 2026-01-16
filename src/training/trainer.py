@@ -212,6 +212,14 @@ class Trainer:
         history["best_metrics"] = best_val_metrics
         history["best_epoch"] = self.best_epoch
 
+        # Save checkpoint to disk if enabled
+        if self.save_checkpoints and self.best_model_state is not None:
+            checkpoint_path = self.checkpoint_dir / "best_model.pt"
+            try:
+                torch.save(self.best_model_state, checkpoint_path)
+            except Exception as e:
+                print(f"⚠️  Failed to save checkpoint: {e}")
+
         return history
 
     def train_epoch(self) -> tuple[float, float]:

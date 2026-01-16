@@ -30,12 +30,13 @@ checkpoints/
 
 # Experiment results and logs
 results/
+results/visualizations**
 logs/
 *.csv
 *.json
 *.pkl
 
-# Keep per-run summary.json files and the results folder itself
+# Keep per-run results.json files and the results folder itself
 !results/
 !results/**/
 !results/**/results.json

@@ -29,13 +29,64 @@ def find_latest_run_dir(results_dir: Path) -> Path | None:
     return sorted(runs)[-1] if runs else None
 
 
+def generate_summary_from_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Generate summary.json structure from results.json.
+
+    Organizes results by dataset and aggregates metrics.
+    """
+    summary: dict[str, Any] = {"by_dataset": {}}
+
+    for result in results:
+        if "error" in result:
+            continue  # Skip failed runs
+
+        dataset = result.get("dataset")
+        model = result.get("model")
+
+        if not dataset or not model:
+            continue
+
+        # Initialize dataset if not seen
+        if dataset not in summary["by_dataset"]:
+            summary["by_dataset"][dataset] = {}
+
+        # Store model result (use accuracy as primary metric)
+        summary["by_dataset"][dataset][model] = result.get("accuracy", 0.0)
+
+    return summary
+
+
 def load_summary(run_dir: Path) -> dict[str, Any] | None:
-    """Load summary.json from a benchmark run."""
+    """Load summary.json from a benchmark run, generating if needed."""
     summary_file = run_dir / "summary.json"
-    if not summary_file.exists():
+
+    # If summary exists, load and return it
+    if summary_file.exists():
+        with open(summary_file, "r") as f:
+            return json.load(f)
+
+    # Otherwise, try to generate from results.json
+    results_file = run_dir / "results.json"
+    if not results_file.exists():
         return None
-    with open(summary_file, "r") as f:
-        return json.load(f)
+
+    print("⚠️  No summary.json found; generating from results.json...")
+    with open(results_file, "r") as f:
+        results = json.load(f)
+
+    # Generate summary
+    summary = generate_summary_from_results(results)
+
+    # Save it for future use
+    try:
+        with open(summary_file, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"✅ Summary saved to {summary_file}")
+    except Exception as e:
+        print(f"⚠️  Could not save summary: {e}")
+
+    return summary
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -242,7 +293,7 @@ def auto_tune_and_run(rounds: int = 2) -> None:
     1. Find latest benchmark results
     2. If none exist, run initial benchmark
     3. For each round:
-       - Load summary
+       - Load summary (generate if needed)
        - Adjust config based on results
        - Run benchmark
        - Update summary for next round
@@ -259,16 +310,8 @@ def auto_tune_and_run(rounds: int = 2) -> None:
 
     summary = load_summary(latest)
     if summary is None:
-        print(f"No summary.json in {latest}, running benchmark to create baseline...")
-        run_benchmark()
-        latest = find_latest_run_dir(RESULTS_DIR)
-        if latest is None:
-            print("Failed to produce an initial run; aborting.")
-            return
-        summary = load_summary(latest)
-        if summary is None:
-            print("Failed to load summary after baseline; aborting.")
-            return
+        print(f"No summary.json in {latest}, and could not generate from results.json; aborting.")
+        return
 
     backup_config()
 
@@ -287,9 +330,9 @@ def auto_tune_and_run(rounds: int = 2) -> None:
             new_summary = load_summary(latest)
             if new_summary:
                 summary = new_summary
-                print("✓ Loaded updated summary for next round.")
+                print("✓ Loaded/generated summary for next round.")
             else:
-                print("⚠️ Could not load updated summary; reusing previous summary.")
+                print("⚠️ Could not load or generate summary; reusing previous summary.")
 
 
 if __name__ == "__main__":

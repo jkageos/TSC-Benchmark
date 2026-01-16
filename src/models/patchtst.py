@@ -16,7 +16,11 @@ from src.models.base import BaseModel
 
 
 class PatchEmbedding(nn.Module):
-    """Patch embedding module for time series."""
+    """
+    Patch embedding module for time series.
+
+    Uses unfold for efficient patching and padding to ensure no data loss.
+    """
 
     def __init__(self, patch_len: int, stride: int, d_model: int):
         super().__init__()
@@ -27,37 +31,47 @@ class PatchEmbedding(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: (batch_size, seq_len, channels)
+            x: (batch_size, seq_len, 1) - Note: channel dim is always 1 due to CI setup
 
         Returns:
             Patch embeddings (batch_size, num_patches, d_model)
         """
-        # Compute sliding window patches; pad last patch if incomplete
-        batch_size, seq_len, channels = x.shape
+        # x is (B, L, 1)
+        # Permute to (B, 1, L) for unfold
+        x = x.permute(0, 2, 1)
 
-        num_patches = max(1, (seq_len - self.patch_len) // self.stride + 1)
+        batch_size, channels, seq_len = x.shape
 
-        patches = []
-        for i in range(num_patches):
-            start = i * self.stride
-            end = min(start + self.patch_len, seq_len)
-
-            # Pad if last patch is shorter
-            if end - start < self.patch_len:
-                patch = x[:, start:end, 0]
-                pad_len = self.patch_len - (end - start)
-                patch = torch.nn.functional.pad(patch, (0, pad_len), mode="constant", value=0)
+        # Calculate required padding to ensure the last patch covers the end
+        if seq_len <= self.patch_len:
+            pad_len = self.patch_len - seq_len
+        else:
+            # Calculate how much we need to pad to make the last window valid
+            # Formula: L_out = (L_in + 2*padding - dilation*(kernel_size-1) - 1)/stride + 1
+            # We want strict coverage, so we pad the end
+            remainder = (seq_len - self.patch_len) % self.stride
+            if remainder == 0:
+                pad_len = 0
             else:
-                patch = x[:, start:end, 0]
+                pad_len = self.stride - remainder
 
-            patches.append(patch)
+        # Pad the last dimension (time)
+        # Reflection or replication padding is often better for TS, but zero is standard for PatchTST
+        if pad_len > 0:
+            x = torch.nn.functional.pad(x, (0, pad_len), value=0)
 
-        patches = torch.stack(patches, dim=1)
+        # Unfold: (B, C, L) -> (B, C, NumPatches, PatchLen)
+        # kernel_size=patch_len, stride=stride
+        patches = x.unfold(dimension=2, size=self.patch_len, step=self.stride)
 
-        # Project each patch (length patch_len) to d_model
-        patch_embeddings = self.projection(patches)
+        # patches is (B, 1, NumPatches, PatchLen)
+        # Reshape to (B, NumPatches, PatchLen)
+        patches = patches.reshape(batch_size, -1, self.patch_len)
 
-        return patch_embeddings
+        # Linear Projection: (B, N, P) -> (B, N, D)
+        embeddings = self.projection(patches)
+
+        return embeddings
 
 
 class MultiHeadAttention(nn.Module):
@@ -160,15 +174,22 @@ class PatchTST(BaseModel):
     ):
         super().__init__(num_classes)
 
-        # Calculate number of patches
-        num_patches = max(1, (input_length - patch_len) // stride + 1)
+        # Calculate exact number of patches after padding logic
+        if input_length <= patch_len:
+            num_patches = 1
+        else:
+            remainder = (input_length - patch_len) % stride
+            pad_len = 0 if remainder == 0 else (stride - remainder)
+            padded_len = input_length + pad_len
+            num_patches = (padded_len - patch_len) // stride + 1
 
         self.patch_embedding = PatchEmbedding(patch_len, stride, d_model)
 
         # Class token aggregates sequence info for classification
         self.class_token = nn.Parameter(torch.randn(1, 1, d_model))
 
-        # Positional encoding for [CLS] + patch tokens
+        # Positional encoding: Add small buffer (e.g. +5) to handle potential slight length variations
+        # or rely on exact matching. Here we trust the calculation.
         self.positional_encoding = nn.Parameter(torch.randn(1, num_patches + 1, d_model))
 
         self.transformer_blocks = nn.ModuleList(

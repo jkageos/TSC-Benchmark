@@ -364,10 +364,10 @@ def create_efficiency_plots(
     Create comprehensive efficiency and performance analysis plots.
 
     Includes:
-    - Classification performance by model (box plot)
-    - Accuracy distribution by model (violin plot)
-    - Training time efficiency (bar chart)
-    - Performance vs. training time (scatter plot)
+    1. Model Performance (Box Plot of Accuracy)
+    2. Parameter Efficiency (Accuracy vs Parameters)
+    3. Memory Efficiency (Accuracy vs Peak Memory)
+    4. Running Time Efficiency (Accuracy vs Training Time)
     """
     # Filter valid data
     valid_df = _filter_valid_data(df)
@@ -376,83 +376,75 @@ def create_efficiency_plots(
         print("⚠️ No valid data for efficiency plots")
         return
 
-    fig = plt.figure(figsize=(16, 12))
+    fig = plt.figure(figsize=(20, 16))
 
-    # 1. Classification Performance by Model (Box Plot)
+    # Define common style for scatter plots
+    models = sorted(valid_df["model"].unique())
+    cmap_tab = plt.get_cmap("tab10")
+    colors_map = cmap_tab(np.linspace(0, 1, len(models)))
+
+    def plot_scatter(ax, x_col, y_col, x_label, y_label, title, log_x=False):
+        if x_col in valid_df.columns and y_col in valid_df.columns:
+            for idx, model in enumerate(models):
+                model_data = valid_df[valid_df["model"] == model]
+                ax.scatter(
+                    model_data[x_col],
+                    model_data[y_col],
+                    label=model,
+                    s=100,
+                    alpha=0.6,
+                    color=colors_map[idx],
+                    edgecolors="w",
+                    linewidth=0.5,
+                )
+
+            ax.set_xlabel(x_label, fontsize=12, weight="bold")
+            ax.set_ylabel(y_label, fontsize=12, weight="bold")
+            ax.set_title(title, fontsize=14, weight="bold", pad=10)
+            ax.grid(True, alpha=0.3, linestyle="--")
+            if log_x:
+                ax.set_xscale("log")
+        else:
+            ax.text(
+                0.5, 0.5, f"Missing data for {title}\nReq: {x_col}", ha="center", va="center", transform=ax.transAxes
+            )
+
+    # 1. Classification Performance (Box Plot)
     ax1 = plt.subplot(2, 2, 1)
     if "accuracy" in valid_df.columns:
-        valid_df.boxplot(column="accuracy", by="model", ax=ax1)
-        ax1.set_title("Classification Performance by Model", fontsize=12, weight="bold")
-        ax1.set_xlabel("Model", fontsize=11)
-        ax1.set_ylabel("Accuracy", fontsize=11)
+        valid_df.boxplot(
+            column="accuracy", by="model", ax=ax1, patch_artist=True, boxprops=dict(facecolor="lightblue", alpha=0.5)
+        )
+        ax1.set_title("Model Performance", fontsize=14, weight="bold", pad=10)
+        ax1.set_xlabel("Model", fontsize=12, weight="bold")
+        ax1.set_ylabel("Accuracy", fontsize=12, weight="bold")
         # Remove automatic title from boxplot
         fig.suptitle("")
         plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right")
+        ax1.grid(True, alpha=0.3, axis="y")
 
-    # 2. Accuracy Distribution Across Datasets
+    # 2. Parameter Efficiency
     ax2 = plt.subplot(2, 2, 2)
-    if "accuracy" in valid_df.columns:
-        # Plot accuracy by model (violin plot)
-        models = sorted(valid_df["model"].unique())
-        accuracy_by_model = [valid_df[valid_df["model"] == m]["accuracy"].values for m in models]
-
-        ax2.violinplot(accuracy_by_model, positions=range(len(models)), showmeans=True)
-        ax2.set_xticks(range(len(models)))
-        ax2.set_xticklabels(models, rotation=45, ha="right")
-        ax2.set_ylabel("Accuracy", fontsize=11)
-        ax2.set_title("Accuracy Distribution by Model", fontsize=12, weight="bold")
-        ax2.grid(axis="y", alpha=0.3)
-
-    # 3. Training Time Efficiency
-    ax3 = plt.subplot(2, 2, 3)
-    if "training_time" in valid_df.columns:
-        time_by_model = valid_df.groupby("model")["training_time"].agg(["mean", "std"]).reset_index()
-        x_pos = np.arange(len(time_by_model))
-
-        bars = ax3.bar(
-            x_pos,
-            time_by_model["mean"],
-            yerr=time_by_model["std"],
-            capsize=5,
+    # Convert params to millions for readability
+    if "num_params" in valid_df.columns:
+        valid_df["params_m"] = valid_df["num_params"] / 1e6
+        plot_scatter(
+            ax2, "params_m", "accuracy", "Parameters (Millions)", "Accuracy", "Parameter Efficiency", log_x=True
         )
+        # Add legend only directly to this plot (shared across others by color)
+        ax2.legend(loc="best", fontsize=10, frameon=True, framealpha=0.9)
+    else:
+        ax2.text(0.5, 0.5, "Missing 'num_params' data", ha="center", va="center", transform=ax2.transAxes)
 
-        # Color bars by performance (red = slow, green = fast)
-        cmap = plt.get_cmap("RdYlGn")
-        colors_array = cmap(np.linspace(0.3, 0.9, len(bars)))
-        for bar, color in zip(bars, colors_array):
-            bar.set_color(color)
+    # 3. Memory Efficiency
+    ax3 = plt.subplot(2, 2, 3)
+    plot_scatter(ax3, "peak_memory_mb", "accuracy", "Peak GPU Memory (MB)", "Accuracy", "Memory Efficiency")
 
-        ax3.set_xticks(x_pos)
-        ax3.set_xticklabels(time_by_model["model"], rotation=45, ha="right")
-        ax3.set_ylabel("Training Time (seconds)", fontsize=11)
-        ax3.set_title("Training Time Efficiency", fontsize=12, weight="bold")
-        ax3.grid(axis="y", alpha=0.3)
-
-    # 4. Accuracy vs. Training Time (Scatter)
+    # 4. Running Time Efficiency
     ax4 = plt.subplot(2, 2, 4)
-    if "accuracy" in valid_df.columns and "training_time" in valid_df.columns:
-        models = sorted(valid_df["model"].unique())
-        cmap_tab = plt.get_cmap("tab10")
-        colors_map = cmap_tab(np.linspace(0, 1, len(models)))
+    plot_scatter(ax4, "training_time", "accuracy", "Training Time (s)", "Accuracy", "Running Time Efficiency")
 
-        for idx, model in enumerate(models):
-            model_data = valid_df[valid_df["model"] == model]
-            ax4.scatter(
-                model_data["training_time"],
-                model_data["accuracy"],
-                label=model,
-                s=100,
-                alpha=0.6,
-                color=colors_map[idx],
-            )
-
-        ax4.set_xlabel("Training Time (seconds)", fontsize=11)
-        ax4.set_ylabel("Accuracy", fontsize=11)
-        ax4.set_title("Performance vs. Training Time", fontsize=12, weight="bold")
-        ax4.legend(loc="best", fontsize=9)
-        ax4.grid(True, alpha=0.3)
-
-    plt.tight_layout()
+    plt.tight_layout(pad=3.0)
     output_file = output_dir / "04_efficiency_analysis.png"
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
     print(f"✅ Efficiency analysis plot saved: {output_file}")
