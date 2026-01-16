@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.transforms import Bbox
 
 # Dataset metadata for UCR datasets
 DATASET_METADATA = {
@@ -142,8 +143,12 @@ def create_dataset_table(output_dir: Path) -> None:
     df = pd.DataFrame(data)
 
     # Create figure for table
-    fig, ax = plt.subplots(figsize=(14, 8))
-    ax.axis("tight")
+    # Calculate height based on rows to minimize whitespace
+    # ~0.5 inch per row prevents excessive vertical space
+    total_rows = len(df) + 1
+    fig_height = max(4.0, total_rows * 0.5)
+
+    fig, ax = plt.subplots(figsize=(14, fig_height))
     ax.axis("off")
 
     # Create table with proper type casting
@@ -152,12 +157,13 @@ def create_dataset_table(output_dir: Path) -> None:
         colLabels=list(df.columns),
         cellLoc="center",
         loc="center",
+        bbox=Bbox.from_bounds(0, 0, 1, 1),
     )
 
     # Style the table
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table.scale(1, 2.5)
+    # Scale removed as bbox handles dimensions
 
     # Header styling
     for i in range(len(df.columns)):
@@ -178,7 +184,7 @@ def create_dataset_table(output_dir: Path) -> None:
 
     # Save figure
     output_file = output_dir / "01_dataset_table.png"
-    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.savefig(output_file, dpi=300, bbox_inches="tight", pad_inches=0.01)
     print(f"✅ Dataset table saved: {output_file}")
     plt.close()
 
@@ -513,9 +519,11 @@ def create_model_comparison_table(df: pd.DataFrame, output_dir: Path) -> None:
 
     summary_df = pd.DataFrame(summary_stats)
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.axis("tight")
+    # Create figure with dynamic height to reduce whitespace
+    total_rows = len(summary_df) + 1
+    fig_height = max(3.0, total_rows * 0.5)
+
+    fig, ax = plt.subplots(figsize=(12, fig_height))
     ax.axis("off")
 
     table = ax.table(
@@ -523,11 +531,11 @@ def create_model_comparison_table(df: pd.DataFrame, output_dir: Path) -> None:
         colLabels=list(summary_df.columns),
         cellLoc="center",
         loc="center",
+        bbox=Bbox.from_bounds(0, 0, 1, 1),
     )
 
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table.scale(1, 2)
 
     # Header styling
     for i in range(len(summary_df.columns)):
@@ -547,7 +555,7 @@ def create_model_comparison_table(df: pd.DataFrame, output_dir: Path) -> None:
     plt.title("Model Performance Summary", fontsize=14, weight="bold", pad=20)
 
     output_file = output_dir / "05_model_comparison_table.png"
-    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.savefig(output_file, dpi=300, bbox_inches="tight", pad_inches=0.01)
     print(f"✅ Model comparison table saved: {output_file}")
     plt.close()
 
@@ -598,9 +606,11 @@ def create_dataset_performance_table(df: pd.DataFrame, output_dir: Path) -> None
 
     summary_df = pd.DataFrame(summary_stats)
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 10))
-    ax.axis("tight")
+    # Create figure with dynamic height
+    total_rows = len(summary_df) + 1
+    fig_height = max(4.0, total_rows * 0.5)
+
+    fig, ax = plt.subplots(figsize=(12, fig_height))
     ax.axis("off")
 
     table = ax.table(
@@ -608,11 +618,11 @@ def create_dataset_performance_table(df: pd.DataFrame, output_dir: Path) -> None
         colLabels=list(summary_df.columns),
         cellLoc="center",
         loc="center",
+        bbox=Bbox.from_bounds(0, 0, 1, 1),
     )
 
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table.scale(1, 2)
 
     # Header styling
     for i in range(len(summary_df.columns)):
@@ -632,7 +642,7 @@ def create_dataset_performance_table(df: pd.DataFrame, output_dir: Path) -> None
     plt.title("Dataset-wise Performance Summary", fontsize=14, weight="bold", pad=20)
 
     output_file = output_dir / "06_dataset_performance_table.png"
-    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.savefig(output_file, dpi=300, bbox_inches="tight", pad_inches=0.01)
     print(f"✅ Dataset performance table saved: {output_file}")
     plt.close()
 
