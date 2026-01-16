@@ -402,11 +402,28 @@ def create_efficiency_plots(
             ax.set_ylabel(y_label, fontsize=12, weight="bold")
             ax.set_title(title, fontsize=14, weight="bold", pad=10)
             ax.grid(True, alpha=0.3, linestyle="--")
+
             if log_x:
                 ax.set_xscale("log")
+
+                # Use LogLocator to force ticks at 1, 2, 5 intervals (e.g., 100, 200, 500)
+                # Use ScalarFormatter to show plain numbers (100) instead of scientific (10^2)
+                from matplotlib.ticker import LogLocator, ScalarFormatter
+
+                ax.xaxis.set_major_locator(LogLocator(base=10.0, subs=[1.0, 2.0, 5.0]))
+
+                formatter = ScalarFormatter()
+                formatter.set_scientific(False)
+                formatter.set_useOffset(False)
+                ax.xaxis.set_major_formatter(formatter)
         else:
             ax.text(
-                0.5, 0.5, f"Missing data for {title}\nReq: {x_col}", ha="center", va="center", transform=ax.transAxes
+                0.5,
+                0.5,
+                f"Missing data for {title}\nReq: {x_col}",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
             )
 
     # 1. Classification Performance (Box Plot)
@@ -425,11 +442,11 @@ def create_efficiency_plots(
 
     # 2. Parameter Efficiency
     ax2 = plt.subplot(2, 2, 2)
-    # Convert params to millions for readability
+    # Convert params to thousands for readability
     if "num_params" in valid_df.columns:
-        valid_df["params_m"] = valid_df["num_params"] / 1e6
+        valid_df["params_k"] = valid_df["num_params"] / 1e3
         plot_scatter(
-            ax2, "params_m", "accuracy", "Parameters (Millions)", "Accuracy", "Parameter Efficiency", log_x=True
+            ax2, "params_k", "accuracy", "Parameters (Thousands)", "Accuracy", "Parameter Efficiency", log_x=True
         )
         # Add legend only directly to this plot (shared across others by color)
         ax2.legend(loc="best", fontsize=10, frameon=True, framealpha=0.9)
